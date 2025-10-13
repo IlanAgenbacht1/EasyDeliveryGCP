@@ -4,6 +4,22 @@ import android.content.Context;
 import android.os.Handler;
 import android.util.Log;
 
+/**
+ * @deprecated This class is deprecated and replaced by FirestoreSyncManager.
+ * 
+ * DropboxHelper is no longer used in the application. All trip management,
+ * file storage, and synchronization is now handled by Firebase/Firestore.
+ * 
+ * Migration path:
+ * - Trip management: Use FirestoreSyncManager
+ * - File storage: Use FirebaseStorageManager  
+ * - Sync operations: Native Firestore offline persistence
+ * 
+ * This class is kept temporarily for reference during migration.
+ * It will be removed in a future version.
+ */
+@Deprecated
+
 import com.clone.EasyDelivery.BuildConfig;
 import com.clone.EasyDelivery.Database.DeliveryDb;
 import com.dropbox.core.DbxException;

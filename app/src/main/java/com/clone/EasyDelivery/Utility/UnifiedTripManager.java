@@ -2,38 +2,64 @@ package com.clone.EasyDelivery.Utility;
 
 import android.content.Context;
 import android.util.Log;
-import org.json.JSONObject;
-import java.io.File;
+import com.clone.EasyDelivery.Application.EasyDeliveryApplication;
+import com.clone.EasyDelivery.Model.*;
+import com.clone.EasyDelivery.Model.Enum.TripStatus;
+import com.clone.EasyDelivery.Firebase.FirestoreSyncManager;
+import com.clone.EasyDelivery.Firebase.Models.FirestoreTrip;
+import com.clone.EasyDelivery.Firebase.Models.FirestoreDelivery;
+import com.clone.EasyDelivery.Firebase.Models.SessionInfo;
+import com.clone.EasyDelivery.Utility.RealmClient;
 
-// Import operation classes
-import com.clone.EasyDelivery.Utility.operations.*;
-import com.clone.EasyDelivery.Utility.operations.SyncOperation.SyncResult;
+import io.realm.Realm;
+import io.realm.RealmResults;
+
+import com.google.android.gms.tasks.Task;
+import com.google.android.gms.tasks.Tasks;
+import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.android.gms.tasks.OnFailureListener;
+import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.QuerySnapshot;
+import com.google.firebase.firestore.DocumentReference;
+import com.google.firebase.firestore.ListenerRegistration;
+import com.google.firebase.auth.FirebaseAuth;
+
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 
 /**
- * UnifiedTripManager - Simple, unified API for all trip operations
+ * UnifiedTripManager - Modern Firebase/Firestore trip management
  * 
  * Features:
- * - Local tracking for dashboard persistence
- * - Device-aware periodic cleanup via SyncService
- * - Works online or offline with automatic sync
- * - Simple, non-competing architecture
+ * - Firebase/Firestore real-time operations
+ * - Transaction-based atomic operations
+ * - Device-aware operations with Firebase Auth
+ * - Offline-first with automatic sync
+ * - Clean, modern architecture
  */
 public class UnifiedTripManager {
     
     private static final String TAG = "UnifiedTripManager";
     
     private final Context context;
-    private final ConnectivityAwareSyncManager syncManager;
+    private final FirestoreSyncManager firestoreSyncManager;
     private final String deviceId;
     private static UnifiedTripManager instance;
     
-    // Local tracking of trips claimed by this device
-    private final java.util.Set<String> locallyClaimedTrips = new java.util.HashSet<>();
+    // Real-time trip listeners
+    private final Map<String, ListenerRegistration> tripListeners = new HashMap<>();
+    
+    // Local tracking for UI optimization
+    private final Set<String> locallyClaimedTrips = new HashSet<>();
     
     private UnifiedTripManager(Context context) {
         this.context = context.getApplicationContext();
-        this.syncManager = ConnectivityAwareSyncManager.getInstance(context);
-        this.deviceId = generateDeviceId();
+        this.firestoreSyncManager = FirestoreSyncManager.getInstance(context);
+        this.deviceId = firestoreSyncManager != null ? firestoreSyncManager.getCurrentDeviceId() : generateDeviceId();
+        
+        Log.i(TAG, "UnifiedTripManager initialized with Firestore - Device ID: " + deviceId);
     }
     
     public static synchronized UnifiedTripManager getInstance(Context context) {
@@ -44,40 +70,59 @@ public class UnifiedTripManager {
     }
     
     /**
-     * Claim a trip - instant response, automatic sync
+     * Claim a trip using Firestore transaction
      */
     public boolean claimTrip(String tripId) {
+        return claimTrip(tripId, AppConstant.DRIVER, AppConstant.VEHICLE);
+    }
+    
+    /**
+     * Claim a trip with driver and vehicle information
+     */
+    public boolean claimTrip(String tripId, String driverId, String vehicleId) {
         if (tripId == null || tripId.trim().isEmpty()) {
             Log.w(TAG, "Cannot claim trip - invalid trip ID");
             return false;
         }
         
+        if (firestoreSyncManager == null) {
+            Log.e(TAG, "FirestoreSyncManager not available for trip claiming");
+            return false;
+        }
+        
+        Log.i(TAG, "🎯 Claiming trip: " + tripId + " (driver: " + driverId + ", vehicle: " + vehicleId + ")");
+        
         try {
-            JSONObject operationData = new JSONObject();
-            operationData.put("tripId", tripId);
-            operationData.put("deviceId", deviceId);
-            operationData.put("action", "claim");
+            Task<Boolean> claimTask = firestoreSyncManager.claimTrip(tripId, driverId, vehicleId);
+            Boolean success = Tasks.await(claimTask);
             
-            SyncOperation operation = ClaimTripOperation.create(tripId, operationData);
-            
-            SyncResult result = syncManager.executeOperation(operation);
-            
-            if (result.success) {
+            if (success != null && success) {
                 locallyClaimedTrips.add(tripId);
+                // Start listening to real-time updates for this trip
+                startTripListener(tripId);
+                Log.i(TAG, "✅ Trip claimed successfully: " + tripId);
                 return true;
             } else {
-                Log.w(TAG, "Trip claim failed: " + tripId + " - " + result.message);
+                Log.w(TAG, "⚠️ Trip claim failed: " + tripId);
                 return false;
             }
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Error creating claim operation for trip: " + tripId, e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException && cause.getMessage() != null) {
+                Log.w(TAG, "⚠️ Trip claim failed: " + tripId + " - " + cause.getMessage());
+            } else {
+                Log.e(TAG, "❌ Trip claim error: " + tripId, e);
+            }
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Log.e(TAG, "❌ Trip claim interrupted: " + tripId, e);
             return false;
         }
     }
     
     /**
-     * Start a trip - instant response, automatic sync
+     * Start a trip using Firestore transaction
      */
     public boolean startTrip(String tripId) {
         if (tripId == null || tripId.trim().isEmpty()) {
@@ -85,32 +130,43 @@ public class UnifiedTripManager {
             return false;
         }
         
+        if (firestoreSyncManager == null) {
+            Log.e(TAG, "FirestoreSyncManager not available for trip starting");
+            return false;
+        }
+        
+        Log.i(TAG, "🚀 Starting trip: " + tripId);
         
         try {
-            JSONObject operationData = new JSONObject();
-            operationData.put("tripId", tripId);
-            operationData.put("deviceId", deviceId);
-            operationData.put("action", "start");
+            Task<Boolean> startTask = firestoreSyncManager.startTrip(tripId);
+            Boolean success = Tasks.await(startTask);
             
-            SyncOperation operation = StartTripOperation.create(tripId, operationData);
-            
-            SyncResult result = syncManager.executeOperation(operation);
-            
-            if (result.success) {
+            if (success != null && success) {
+                Log.i(TAG, "✅ Trip started successfully: " + tripId);
+                // Update local app state
+                AppConstant.TRIPID = tripId;
                 return true;
             } else {
-                Log.w(TAG, "Trip start failed: " + tripId + " - " + result.message);
+                Log.w(TAG, "⚠️ Trip start failed: " + tripId);
                 return false;
             }
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Error creating start operation for trip: " + tripId, e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException && cause.getMessage() != null) {
+                Log.w(TAG, "⚠️ Trip start failed: " + tripId + " - " + cause.getMessage());
+            } else {
+                Log.e(TAG, "❌ Trip start error: " + tripId, e);
+            }
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Log.e(TAG, "❌ Trip start interrupted: " + tripId, e);
             return false;
         }
     }
     
     /**
-     * Complete a trip - instant response, automatic sync
+     * Complete a trip using Firestore batch operation
      */
     public boolean completeTrip(String tripId) {
         if (tripId == null || tripId.trim().isEmpty()) {
@@ -118,33 +174,49 @@ public class UnifiedTripManager {
             return false;
         }
         
+        if (firestoreSyncManager == null) {
+            Log.e(TAG, "FirestoreSyncManager not available for trip completion");
+            return false;
+        }
+        
+        Log.i(TAG, "🏁 Completing trip: " + tripId);
         
         try {
-            JSONObject operationData = new JSONObject();
-            operationData.put("tripId", tripId);
-            operationData.put("deviceId", deviceId);
-            operationData.put("action", "complete");
+            Task<Boolean> completeTask = firestoreSyncManager.completeTrip(tripId);
+            Boolean success = Tasks.await(completeTask);
             
-            SyncOperation operation = CompleteTripOperation.create(tripId, operationData);
-            
-            SyncResult result = syncManager.executeOperation(operation);
-            
-            if (result.success) {
+            if (success != null && success) {
                 locallyClaimedTrips.remove(tripId);
+                // Stop listening to this trip
+                stopTripListener(tripId);
+                // Update local app state
+                if (tripId.equals(AppConstant.TRIPID)) {
+                    AppConstant.TRIPID = "";
+                }
+                AppConstant.completedTrips.add(tripId);
+                Log.i(TAG, "✅ Trip completed successfully: " + tripId);
                 return true;
             } else {
-                Log.w(TAG, "Trip completion failed: " + tripId + " - " + result.message);
+                Log.w(TAG, "⚠️ Trip completion failed: " + tripId);
                 return false;
             }
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Error creating completion operation for trip: " + tripId, e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException && cause.getMessage() != null) {
+                Log.w(TAG, "⚠️ Trip completion failed: " + tripId + " - " + cause.getMessage());
+            } else {
+                Log.e(TAG, "❌ Trip completion error: " + tripId, e);
+            }
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Log.e(TAG, "❌ Trip completion interrupted: " + tripId, e);
             return false;
         }
     }
     
     /**
-     * Release a trip - instant response, automatic sync
+     * Release a trip using Firestore transaction
      */
     public boolean releaseTrip(String tripId, String reason) {
         if (tripId == null || tripId.trim().isEmpty()) {
@@ -156,31 +228,382 @@ public class UnifiedTripManager {
             reason = "Manual release";
         }
         
+        if (firestoreSyncManager == null) {
+            Log.e(TAG, "FirestoreSyncManager not available for trip release");
+            return false;
+        }
+        
         Log.i(TAG, "↩️ Releasing trip: " + tripId + " (reason: " + reason + ")");
         
         try {
-            JSONObject operationData = new JSONObject();
-            operationData.put("tripId", tripId);
-            operationData.put("deviceId", deviceId);
-            operationData.put("action", "release");
-            operationData.put("reason", reason);
+            Task<Boolean> releaseTask = firestoreSyncManager.releaseTrip(tripId, reason);
+            Boolean success = Tasks.await(releaseTask);
+            
+            if (success != null && success) {
+                locallyClaimedTrips.remove(tripId);
+                // Stop listening to this trip
+                stopTripListener(tripId);
+                // Update local app state
+                if (tripId.equals(AppConstant.TRIPID)) {
+                    AppConstant.TRIPID = "";
+                }
+                Log.i(TAG, "✅ Trip released successfully: " + tripId);
+                return true;
+            } else {
+                Log.w(TAG, "⚠️ Trip release failed: " + tripId);
+                return false;
+            }
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException && cause.getMessage() != null) {
+                Log.w(TAG, "⚠️ Trip release failed: " + tripId + " - " + cause.getMessage());
+            } else {
+                Log.e(TAG, "❌ Trip release error: " + tripId, e);
+            }
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Log.e(TAG, "❌ Trip release interrupted: " + tripId, e);
+            return false;
+        }
+    }
+    
+    /**
+     * Release a trip without reason
+     */
+    public boolean releaseTrip(String tripId) {
+        return releaseTrip(tripId, "Manual release");
+    }
+    
+    /**
+     * Claim and start a trip in one operation
+     */
+    public boolean claimAndStartTrip(String tripId) {
+        Log.i(TAG, "Claim and start trip: " + tripId);
+        
+        boolean claimed = claimTrip(tripId);
+        if (claimed) {
+            // Small delay to let Firestore update propagate
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            
+            boolean started = startTrip(tripId);
+            if (started) {
+                Log.i(TAG, "Successfully claimed and started trip: " + tripId);
+                return true;
+            } else {
+                // If start failed, release the claim
+                Log.w(TAG, "Start failed, releasing claim for trip: " + tripId);
+                releaseTrip(tripId, "Start failed after claim");
+                return false;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Update delivery status within a trip
+     */
+    public boolean updateDeliveryStatus(String tripId, String deliveryId, String status, Map<String, Object> metadata) {
+        if (firestoreSyncManager == null) {
+            Log.e(TAG, "FirestoreSyncManager not available for delivery update");
+            return false;
+        }
+        
+        Log.i(TAG, "Updating delivery status: " + deliveryId + " in trip: " + tripId + " -> " + status);
+        
+        try {
+            Task<Boolean> updateTask = firestoreSyncManager.updateDeliveryStatus(tripId, deliveryId, status, metadata);
+            Boolean success = Tasks.await(updateTask);
+            
+            if (success != null && success) {
+                Log.i(TAG, "✅ Delivery status updated: " + deliveryId);
+                return true;
+            } else {
+                Log.w(TAG, "⚠️ Delivery status update failed: " + deliveryId);
+                return false;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Error updating delivery status: " + deliveryId, e);
+            return false;
+        }
+    }
+    
+    /**
+     * Get available trips from Firestore
+     */
+    public CompletableFuture<List<FirestoreTrip>> getAvailableTrips() {
+        if (firestoreSyncManager == null) {
+            CompletableFuture<List<FirestoreTrip>> future = new CompletableFuture<>();
+            future.complete(new ArrayList<>());
+            return future;
+        }
+        
+        return firestoreSyncManager.getAvailableTrips()
+            .thenApply(trips -> {
+                Log.i(TAG, "Retrieved " + trips.size() + " available trips from Firestore");
+                return trips;
+            })
+            .exceptionally(throwable -> {
+                Log.e(TAG, "Error retrieving available trips", throwable);
+                return new ArrayList<>();
+            });
+    }
+    
+    /**
+     * Get a specific trip from Firestore
+     */
+    public CompletableFuture<FirestoreTrip> getTrip(String tripId) {
+        if (firestoreSyncManager == null) {
+            CompletableFuture<FirestoreTrip> future = new CompletableFuture<>();
+            future.complete(null);
+            return future;
+        }
+        
+        return firestoreSyncManager.getTrip(tripId);
+    }
+    
+    /**
+     * Get trips assigned to current device
+     */
+    public CompletableFuture<List<FirestoreTrip>> getMyTrips() {
+        if (firestoreSyncManager == null) {
+            CompletableFuture<List<FirestoreTrip>> future = new CompletableFuture<>();
+            future.complete(new ArrayList<>());
+            return future;
+        }
+        
+        return firestoreSyncManager.getMyTrips()
+            .thenApply(trips -> {
+                // Update local tracking
+                locallyClaimedTrips.clear();
+                for (FirestoreTrip trip : trips) {
+                    locallyClaimedTrips.add(trip.getTripId());
+                }
+                
+                Log.i(TAG, "Retrieved " + trips.size() + " assigned trips from Firestore");
+                return trips;
+            })
+            .exceptionally(throwable -> {
+                Log.e(TAG, "Error retrieving assigned trips", throwable);
+                return new ArrayList<>();
+            });
+    }
+    
+    /**
+     * Start real-time listener for a specific trip
+     */
+    private void startTripListener(String tripId) {
+        if (firestoreSyncManager == null || tripListeners.containsKey(tripId)) {
+            return;
+        }
+        
+        ListenerRegistration listener = firestoreSyncManager.listenToTrip(tripId, new FirestoreSyncManager.TripUpdateCallback() {
+            @Override
+            public void onTripUpdated(FirestoreTrip trip) {
+                Log.d(TAG, "Real-time trip update: " + tripId + " -> " + trip.getStatus());
+                // Update local Realm database
+                updateLocalTrip(trip);
+            }
+            
+            @Override
+            public void onError(Exception error) {
+                Log.e(TAG, "Trip listener error for " + tripId, error);
+            }
+        });
+        
+        tripListeners.put(tripId, listener);
+        Log.d(TAG, "Started real-time listener for trip: " + tripId);
+    }
+    
+    /**
+     * Stop real-time listener for a specific trip
+     */
+    private void stopTripListener(String tripId) {
+        ListenerRegistration listener = tripListeners.remove(tripId);
+        if (listener != null) {
+            listener.remove();
+            Log.d(TAG, "Stopped real-time listener for trip: " + tripId);
+        }
+    }
+    
+    /**
+     * Update local Realm database with Firestore trip data
+     */
+    private void updateLocalTrip(FirestoreTrip firestoreTrip) {
+        try {
+            Realm realm = RealmClient.getInstance(context);
+            realm.executeTransaction(new Realm.Transaction() {
+                @Override
+                public void execute(Realm realm) {
+                    // Convert Firestore trip to local Trip model
+                    Trip localTrip = realm.createObject(Trip.class, firestoreTrip.getTripId());
+                    localTrip.setStatus(firestoreTrip.getStatus());
+                    localTrip.setDriverId(firestoreTrip.getDriverId());
+                    localTrip.setVehicleId(firestoreTrip.getVehicleId());
+                    localTrip.setStartTime(firestoreTrip.getStartTime());
+                    localTrip.setEndTime(firestoreTrip.getEndTime());
+                    localTrip.setLastModified(firestoreTrip.getLastModified());
+                    
+                    // Update deliveries
+                    for (FirestoreDelivery firestoreDelivery : firestoreTrip.getDeliveries()) {
+                        Delivery localDelivery = realm.createObject(Delivery.class, firestoreDelivery.getDeliveryId());
+                        localDelivery.setTripId(firestoreTrip.getTripId());
+                        localDelivery.setDocument(firestoreDelivery.getDocument());
+                        localDelivery.setStatus(firestoreDelivery.getStatus());
+                        localDelivery.setCustomerName(firestoreDelivery.getCustomerName());
+                        localDelivery.setAddress(firestoreDelivery.getAddress());
+                        // Set other delivery fields...
+                        localTrip.getDeliveries().add(localDelivery);
+                    }
+                    
+                    Log.d(TAG, "Updated local trip: " + firestoreTrip.getTripId());
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "Error updating local trip: " + firestoreTrip.getTripId(), e);
+        }
+    }
+    
+    /**
+     * Upload POD (Proof of Delivery) image to Firebase Storage
+     */
+    public CompletableFuture<String> uploadPODImage(String tripId, String deliveryId, byte[] imageData) {
+        if (firestoreSyncManager == null) {
+            CompletableFuture<String> future = new CompletableFuture<>();
+            future.completeExceptionally(new RuntimeException("FirestoreSyncManager not available"));
+            return future;
+        }
+        
+        return firestoreSyncManager.uploadPODImage(tripId, deliveryId, imageData);
+    }
+    
+    /**
+     * Get current device ID
+     */
+    public String getDeviceId() {
+        return deviceId;
+    }
+    
+    /**
+     * Check if we have locally claimed trips
+     */
+    public Set<String> getLocallyClaimedTrips() {
+        return new HashSet<>(locallyClaimedTrips);
+    }
+    
+    /**
+     * Force sync with Firestore
+     */
+    public void forceSync() {
+        if (firestoreSyncManager != null) {
+            Log.i(TAG, "Force sync requested - enabling Firestore offline persistence");
+            firestoreSyncManager.enableOfflinePersistence();
+        }
+    }
+    
+    /**
+     * Get sync status for UI display
+     */
+    public String getSyncStatus() {
+        if (firestoreSyncManager == null) {
+            return "FirestoreSyncManager not available";
+        }
+        
+        if (FirebaseAuth.getInstance().getCurrentUser() != null) {
+            return "Connected to Firestore";
+        } else {
+            return "Not authenticated with Firebase";
+        }
+    }
+    
+    /**
+     * Get system statistics for debugging
+     */
+    public String getSystemStatistics() {
+        StringBuilder stats = new StringBuilder();
+        stats.append("Unified Trip Manager Status:\n");
+        stats.append("Device ID: ").append(deviceId).append("\n");
+        stats.append("Locally Claimed Trips: ").append(locallyClaimedTrips.size()).append("\n");
+        stats.append("Active Trip Listeners: ").append(tripListeners.size()).append("\n");
+        stats.append("Firebase Auth: ").append(FirebaseAuth.getInstance().getCurrentUser() != null ? "Authenticated" : "Not authenticated").append("\n");
+        stats.append("Sync Status: ").append(getSyncStatus()).append("\n");
+        
+        return stats.toString();
+    }
+    
+    /**
+     * Clean up resources
+     */
+    public void cleanup() {
+        // Stop all trip listeners
+        for (Map.Entry<String, ListenerRegistration> entry : tripListeners.entrySet()) {
+            entry.getValue().remove();
+            Log.d(TAG, "Stopped listener for trip: " + entry.getKey());
+        }
+        tripListeners.clear();
+        
+        // Clear local tracking
+        locallyClaimedTrips.clear();
+        
+        Log.i(TAG, "UnifiedTripManager cleanup completed");
+    }
+    
+    /**
+     * Generate a unique device ID
+     */
+    private String generateDeviceId() {
+        try {
+            String androidId = android.provider.Settings.Secure.getString(
+                context.getContentResolver(),
+                android.provider.Settings.Secure.ANDROID_ID
+            );
+            
+            String driverName = AppConstant.DRIVER != null ? 
+                AppConstant.DRIVER.replaceAll("[^A-Za-z0-9]", "") : "Driver";
+            
+            StringBuilder composite = new StringBuilder();
+            composite.append(driverName).append("_");
+            
+            if (androidId != null && androidId.length() > 4) {
+                composite.append(androidId.substring(0, Math.min(8, androidId.length())));
+            } else {
+                composite.append("DEV");
+            }
+            
+            if (android.os.Build.MODEL != null) {
+                int modelHash = Math.abs(android.os.Build.MODEL.hashCode() % 10000);
+                composite.append("_").append(modelHash);
+            }
+            
+            return composite.toString();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error generating device ID, using fallback", e);
+            return "Device_FALLBACK_" + System.currentTimeMillis();
+        }
+    }
+}
             
             SyncOperation operation = ReleaseTripOperation.create(tripId, operationData);
             
             SyncResult result = syncManager.executeOperation(operation);
             
             if (result.success) {
-                // 📝 Remove from local tracking when released
                 locallyClaimedTrips.remove(tripId);
-                Log.i(TAG, "✅ Trip release initiated: " + tripId + " - " + result.message + " (removed from local tracking)");
+                Log.i(TAG, "✅ Trip release initiated via legacy: " + tripId + " - " + result.message + " (removed from local tracking)");
                 return true;
             } else {
-                Log.w(TAG, "⚠️ Trip release failed: " + tripId + " - " + result.message);
+                Log.w(TAG, "⚠️ Legacy trip release failed: " + tripId + " - " + result.message);
                 return false;
             }
             
         } catch (Exception e) {
-            Log.e(TAG, "Error creating release operation for trip: " + tripId, e);
+            Log.e(TAG, "❌ Error in legacy release operation for trip: " + tripId, e);
             return false;
         }
     }

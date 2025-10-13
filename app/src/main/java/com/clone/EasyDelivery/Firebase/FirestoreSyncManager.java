@@ -10,6 +10,10 @@ import com.clone.EasyDelivery.Model.Delivery;
 import com.clone.EasyDelivery.Utility.AppConstant;
 import com.clone.EasyDelivery.Database.DeliveryDb;
 
+// Firebase Storage imports
+import com.google.firebase.storage.FirebaseStorage;
+import java.io.File;
+
 import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.auth.FirebaseAuth;
@@ -42,6 +46,7 @@ public class FirestoreSyncManager {
     private final Context context;
     private final FirebaseFirestore db;
     private final FirebaseAuth auth;
+    private final FirebaseStorageManager storageManager;
     private final ExecutorService executor;
     private final Handler mainHandler;
     
@@ -56,6 +61,7 @@ public class FirestoreSyncManager {
         this.context = context;
         this.db = FirebaseFirestore.getInstance();
         this.auth = FirebaseAuth.getInstance();
+        this.storageManager = FirebaseStorageManager.getInstance(context);
         this.executor = Executors.newFixedThreadPool(3);
         this.mainHandler = new Handler(Looper.getMainLooper());
         
@@ -345,30 +351,107 @@ public class FirestoreSyncManager {
     }
     
     /**
-     * Complete a delivery with POD data
+     * Complete a delivery with POD data and file uploads
      */
     public Task<Boolean> completeDelivery(String tripId, String deliveryId, PodData podData) {
-        Log.i(TAG, "Completing delivery: " + deliveryId + " in trip: " + tripId);
+        return completeDelivery(tripId, deliveryId, podData, null, null);
+    }
+    
+    /**
+     * Complete a delivery with POD data, images, and signature files
+     */
+    public Task<Boolean> completeDelivery(String tripId, String deliveryId, PodData podData, 
+                                         File imageFile, File signatureFile) {
+        Log.i(TAG, "🏁 Completing delivery with POD: " + deliveryId + " in trip: " + tripId);
         
-        DocumentReference deliveryRef = db.collection(TRIPS_COLLECTION)
-                .document(tripId)
-                .collection(DELIVERIES_COLLECTION)
-                .document(deliveryId);
-        
-        Map<String, Object> updates = new HashMap<>();
-        updates.put("status", "completed");
-        updates.put("podData", com.google.gson.GsonBuilder.create().toJson(podData));
-        
-        return deliveryRef.update(updates)
-                .continueWith(task -> {
-                    if (task.isSuccessful()) {
-                        Log.i(TAG, "Delivery " + deliveryId + " completed successfully");
-                        return true;
-                    } else {
-                        Log.e(TAG, "Failed to complete delivery " + deliveryId, task.getException());
-                        return false;
+        return Task.call(executor, () -> {
+            try {
+                PodData finalPodData = podData;
+                
+                // Upload files to Firebase Storage if provided
+                if ((imageFile != null && imageFile.exists()) || (signatureFile != null && signatureFile.exists())) {
+                    Log.i(TAG, "📤 Uploading POD files for delivery: " + deliveryId);
+                    
+                    Task<PodData> uploadTask = storageManager.uploadPodData(tripId, deliveryId, podData, imageFile, signatureFile);
+                    finalPodData = Tasks.await(uploadTask);
+                    
+                    Log.i(TAG, "✅ POD files uploaded successfully for delivery: " + deliveryId);
+                }
+                
+                // Update Firestore with POD data (including URLs if files were uploaded)
+                DocumentReference deliveryRef = db.collection(TRIPS_COLLECTION)
+                        .document(tripId)
+                        .collection(DELIVERIES_COLLECTION)
+                        .document(deliveryId);
+                
+                Map<String, Object> updates = new HashMap<>();
+                updates.put("status", "completed");
+                updates.put("podData", com.google.gson.GsonBuilder.create().toJson(finalPodData));
+                
+                // Use Firestore transaction for atomic completion
+                Task<Void> firestoreTask = db.runTransaction(transaction -> {
+                    DocumentSnapshot deliverySnapshot = transaction.get(deliveryRef);
+                    
+                    if (!deliverySnapshot.exists()) {
+                        throw new RuntimeException("Delivery not found: " + deliveryId);
                     }
+                    
+                    FirestoreDelivery delivery = deliverySnapshot.toObject(FirestoreDelivery.class);
+                    if (delivery == null) {
+                        throw new RuntimeException("Failed to parse delivery data");
+                    }
+                    
+                    if ("completed".equals(delivery.getStatus())) {
+                        throw new RuntimeException("Delivery already completed: " + deliveryId);
+                    }
+                    
+                    transaction.update(deliveryRef, updates);
+                    return null;
                 });
+                
+                Tasks.await(firestoreTask);
+                
+                Log.i(TAG, "✅ Delivery " + deliveryId + " completed successfully with POD data");
+                return true;
+                
+            } catch (Exception e) {
+                Log.e(TAG, "❌ Failed to complete delivery " + deliveryId + " with POD", e);
+                return false;
+            }
+        });
+    }
+    
+    /**
+     * Batch complete multiple deliveries (for efficiency)
+     */
+    public Task<Boolean> batchCompleteDeliveries(String tripId, Map<String, PodData> deliveryPodData) {
+        Log.i(TAG, "🏁 Batch completing " + deliveryPodData.size() + " deliveries in trip: " + tripId);
+        
+        return db.runBatch(batch -> {
+            for (Map.Entry<String, PodData> entry : deliveryPodData.entrySet()) {
+                String deliveryId = entry.getKey();
+                PodData podData = entry.getValue();
+                
+                DocumentReference deliveryRef = db.collection(TRIPS_COLLECTION)
+                        .document(tripId)
+                        .collection(DELIVERIES_COLLECTION)
+                        .document(deliveryId);
+                
+                Map<String, Object> updates = new HashMap<>();
+                updates.put("status", "completed");
+                updates.put("podData", com.google.gson.GsonBuilder.create().toJson(podData));
+                
+                batch.update(deliveryRef, updates);
+            }
+        }).continueWith(task -> {
+            if (task.isSuccessful()) {
+                Log.i(TAG, "✅ Batch completed " + deliveryPodData.size() + " deliveries successfully");
+                return true;
+            } else {
+                Log.e(TAG, "❌ Batch delivery completion failed", task.getException());
+                return false;
+            }
+        });
     }
     
     // ======================== DATA MIGRATION ========================
@@ -483,6 +566,11 @@ public class FirestoreSyncManager {
             listener.remove();
         }
         tripDeliveryListeners.clear();
+        
+        // Shutdown storage manager
+        if (storageManager != null) {
+            storageManager.shutdown();
+        }
         
         executor.shutdown();
     }

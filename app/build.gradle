@@ -19,9 +19,7 @@ android {
         versionName "1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField "String", "DROPBOX_REFRESH_TOKEN", "${localProps['DROPBOX_REFRESH_TOKEN'] ?: ''}"
-        buildConfigField "String", "DROPBOX_APP_KEY", "${localProps['DROPBOX_APP_KEY'] ?: ''}"
-        buildConfigField "String", "DROPBOX_APP_SECRET", "${localProps['DROPBOX_APP_SECRET'] ?: ''}"
+        // Dropbox credentials removed - now using Firebase/Firestore
     }
 
     buildTypes {
@@ -76,7 +74,7 @@ dependencies {
 
     implementation group: 'org.eclipse.angus', name: 'jakarta.mail', version: '2.0.3'
 
-    implementation 'com.dropbox.core:dropbox-core-sdk:5.4.0'
+    // implementation 'com.dropbox.core:dropbox-core-sdk:5.4.0' // Removed - replaced with Firebase
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
     implementation 'com.google.zxing:core:3.2.0'
 

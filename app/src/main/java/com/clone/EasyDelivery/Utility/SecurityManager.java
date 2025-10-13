@@ -243,7 +243,9 @@ public class SecurityManager {
 
     /**
      * Store Dropbox credentials securely
+     * @deprecated Dropbox integration replaced by Firebase. This method is no longer used.
      */
+    @Deprecated
     public void storeDropboxCredentials(String refreshToken, String appKey, String appSecret) {
         try {
             storeSecureValue(DROPBOX_TOKEN_KEY, refreshToken);
@@ -257,21 +259,27 @@ public class SecurityManager {
 
     /**
      * Retrieve Dropbox refresh token
+     * @deprecated Dropbox integration replaced by Firebase. This method is no longer used.
      */
+    @Deprecated
     public String getDropboxRefreshToken() {
         return getSecureValue(DROPBOX_TOKEN_KEY, null);
     }
 
     /**
      * Retrieve Dropbox app key
+     * @deprecated Dropbox integration replaced by Firebase. This method is no longer used.
      */
+    @Deprecated
     public String getDropboxAppKey() {
         return getSecureValue(DROPBOX_APP_KEY, null);
     }
 
     /**
      * Retrieve Dropbox app secret
+     * @deprecated Dropbox integration replaced by Firebase. This method is no longer used.
      */
+    @Deprecated
     public String getDropboxAppSecret() {
         return getSecureValue(DROPBOX_SECRET_KEY, null);
     }
