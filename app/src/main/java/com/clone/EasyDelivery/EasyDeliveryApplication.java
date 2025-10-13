@@ -11,6 +11,12 @@ import com.clone.EasyDelivery.Utility.OfflineSyncQueue;
 import com.clone.EasyDelivery.Security.AuditLogger;
 import com.clone.EasyDelivery.Utility.SecurityManager;
 import com.clone.EasyDelivery.Utility.LocationHelper;
+import com.clone.EasyDelivery.Firebase.FirestoreSyncManager;
+
+import com.google.firebase.FirebaseApp;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.FirebaseFirestoreSettings;
 
 import android.content.BroadcastReceiver;
 import android.content.Intent;
@@ -34,6 +40,7 @@ public class EasyDeliveryApplication extends Application {
     private UnifiedTripManager tripManager;
     private OfflineSyncQueue syncQueue;
     private SecurityManager securityManager;
+    private FirestoreSyncManager firestoreSyncManager;
     private BroadcastReceiver connectivityReceiver;
     private volatile long lastConnectivityChangeTime = 0;
     private static final long CONNECTIVITY_DEBOUNCE_MS = 3000; // 3 seconds - increased for better debouncing
@@ -45,6 +52,9 @@ public class EasyDeliveryApplication extends Application {
         Log.i(TAG, "=== EasyDelivery Application Starting ===");
         
         try {
+            // Initialize Firebase first
+            initializeFirebase();
+            
             // Initialize core security first
             initializeSecurity();
             
@@ -81,6 +91,9 @@ public class EasyDeliveryApplication extends Application {
             // Gracefully shutdown sync system
             shutdownSyncSystem();
             
+            // Shutdown Firebase services
+            shutdownFirebase();
+            
             Log.i(TAG, "✅ EasyDelivery Application terminated cleanly");
             
         } catch (Exception e) {
@@ -88,6 +101,43 @@ public class EasyDeliveryApplication extends Application {
         }
         
         super.onTerminate();
+    }
+    
+    /**
+     * Initialize Firebase services
+     */
+    private void initializeFirebase() {
+        try {
+            Log.d(TAG, "Initializing Firebase services...");
+            
+            // Initialize Firebase App
+            if (FirebaseApp.getApps(this).isEmpty()) {
+                FirebaseApp.initializeApp(this);
+                Log.d(TAG, "Firebase App initialized");
+            }
+            
+            // Initialize Firestore with offline persistence
+            FirebaseFirestore firestore = FirebaseFirestore.getInstance();
+            FirebaseFirestoreSettings settings = new FirebaseFirestoreSettings.Builder()
+                    .setPersistenceEnabled(true)
+                    .setCacheSizeBytes(FirebaseFirestoreSettings.CACHE_SIZE_UNLIMITED)
+                    .build();
+            firestore.setFirestoreSettings(settings);
+            
+            // Initialize FirestoreSyncManager (replaces DropboxHelper)
+            firestoreSyncManager = FirestoreSyncManager.getInstance(this);
+            
+            // Set client ID from AppConstant if available
+            if (AppConstant.COMPANY != null && !AppConstant.COMPANY.trim().isEmpty()) {
+                firestoreSyncManager.setCurrentClientId(AppConstant.COMPANY.toLowerCase());
+            }
+            
+            Log.d(TAG, "✅ Firebase services initialized successfully");
+            
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Failed to initialize Firebase services", e);
+            throw new RuntimeException("Firebase initialization failed", e);
+        }
     }
     
     /**
@@ -251,6 +301,25 @@ public class EasyDeliveryApplication extends Application {
     }
     
     /**
+     * Gracefully shutdown Firebase services
+     */
+    private void shutdownFirebase() {
+        try {
+            Log.d(TAG, "Shutting down Firebase services...");
+            
+            // Shutdown FirestoreSyncManager
+            if (firestoreSyncManager != null) {
+                firestoreSyncManager.shutdown();
+            }
+            
+            Log.d(TAG, "✅ Firebase services shutdown complete");
+            
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Error during Firebase services shutdown", e);
+        }
+    }
+    
+    /**
      * Handle app version migrations
      */
     private void performVersionMigration(int fromVersion, int toVersion) {
@@ -290,6 +359,13 @@ public class EasyDeliveryApplication extends Application {
      */
     public OfflineSyncQueue getSyncQueue() {
         return syncQueue;
+    }
+    
+    /**
+     * Get global Firestore sync manager instance
+     */
+    public FirestoreSyncManager getFirestoreSyncManager() {
+        return firestoreSyncManager;
     }
     
     /**
@@ -337,48 +413,36 @@ public class EasyDeliveryApplication extends Application {
      * 🚑 CRITICAL: Check for orphaned trips on startup
      * 
      * This handles the scenario where:
-     * 1. App was viewing a trip (trip moved to in_progress)
+     * 1. App was viewing a trip (trip claimed/in_progress by this device)
      * 2. App was forcefully closed/updated during development
-     * 3. Trip remains orphaned in in_progress folder
+     * 3. Trip remains orphaned in claimed/in_progress status
      * 4. Device should either resume or release the trip
      */
     private void checkForOrphanedTripsOnStartup() {
         Log.i(TAG, "=== 🚑 ORPHANED TRIP RECOVERY: Checking for orphaned trips on startup ===");
         
         try {
-            Thread orphanCheckThread = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        
-                        String currentDeviceId = com.clone.EasyDelivery.Utility.DropboxHelper.getDeviceId(EasyDeliveryApplication.this);
-                        if (currentDeviceId == null || currentDeviceId.isEmpty()) {
-                            Log.w(TAG, "🚑 Cannot check orphaned trips - device ID unavailable");
-                            return;
-                        }
-                        
-                        Log.i(TAG, "🚑 Checking for trips orphaned by device: " + currentDeviceId);
-                        
-                        // Check if we have any trips in in_progress that belong to this device
-                        java.util.List<String> orphanedTrips = findOrphanedTripsForDevice(currentDeviceId);
-                        
-                        if (orphanedTrips.isEmpty()) {
-                            Log.i(TAG, "✅ No orphaned trips found for device: " + currentDeviceId);
-                            return;
-                        }
-                        
-                        Log.w(TAG, "🚑 FOUND " + orphanedTrips.size() + " ORPHANED TRIP(S): " + orphanedTrips);
-                        
-                        // Handle each orphaned trip
-                        for (String tripId : orphanedTrips) {
-                            handleOrphanedTrip(tripId, currentDeviceId);
-                        }
-                        
-                        Log.i(TAG, "✅ Orphaned trip recovery completed");
-                        
-                    } catch (Exception e) {
-                        Log.e(TAG, "❌ Error during orphaned trip recovery", e);
+            Thread orphanCheckThread = new Thread(() -> {
+                try {
+                    // Wait for FirestoreSyncManager to be initialized
+                    if (firestoreSyncManager == null) {
+                        Log.w(TAG, "🚑 Cannot check orphaned trips - FirestoreSyncManager not available");
+                        return;
                     }
+                    
+                    String currentDeviceId = firestoreSyncManager.getCurrentDeviceId();
+                    if (currentDeviceId == null || currentDeviceId.isEmpty()) {
+                        Log.w(TAG, "🚑 Cannot check orphaned trips - device ID unavailable");
+                        return;
+                    }
+                    
+                    Log.i(TAG, "🚑 Checking for trips orphaned by device: " + currentDeviceId);
+                    
+                    // Use Firestore query to find orphaned trips
+                    findOrphanedTripsWithFirestore(currentDeviceId);
+                    
+                } catch (Exception e) {
+                    Log.e(TAG, "❌ Error during orphaned trip recovery", e);
                 }
             });
             
@@ -392,46 +456,54 @@ public class EasyDeliveryApplication extends Application {
     }
     
     /**
-     * Find trips in in_progress folder that belong to a specific device
+     * Find trips claimed/in_progress by this device using Firestore query
      */
-    private java.util.List<String> findOrphanedTripsForDevice(String deviceId) {
-        java.util.List<String> orphanedTrips = new java.util.ArrayList<>();
-        
+    private void findOrphanedTripsWithFirestore(String deviceId) {
         try {
-            com.dropbox.core.v2.DbxClientV2 client = com.clone.EasyDelivery.Utility.DropboxHelper.getClient(this);
-            if (client == null) {
-                Log.w(TAG, "🚑 Cannot check orphaned trips - Dropbox client unavailable");
-                return orphanedTrips;
-            }
+            com.google.firebase.firestore.FirebaseFirestore db = com.google.firebase.firestore.FirebaseFirestore.getInstance();
             
-            String inProgressPath = "/Customers/" + com.clone.EasyDelivery.Utility.AppConstant.COMPANY + "/in_progress";
-            com.dropbox.core.v2.files.ListFolderResult inProgressFiles = client.files().listFolder(inProgressPath);
-            
-            if (inProgressFiles != null && !inProgressFiles.getEntries().isEmpty()) {
-                for (int i = 0; i < inProgressFiles.getEntries().size(); i++) {
-                    String fileName = inProgressFiles.getEntries().get(i).getName();
+            // Query for trips claimed or in_progress by this device
+            db.collection("trips")
+                .whereEqualTo("clientId", firestoreSyncManager.getCurrentClientId())
+                .whereIn("status", java.util.Arrays.asList("claimed", "in_progress"))
+                .whereEqualTo("sessionInfo.deviceId", deviceId)
+                .get()
+                .addOnSuccessListener(queryDocumentSnapshots -> {
+                    java.util.List<String> orphanedTripIds = new java.util.ArrayList<>();
                     
-                    // Parse claimed trip filename format: TripId_DeviceId_Timestamp.json
-                    com.clone.EasyDelivery.Utility.DropboxHelper.ClaimInfo claimInfo = com.clone.EasyDelivery.Utility.DropboxHelper.parseClaimInfo(fileName);
-                    
-                    if (claimInfo.isValidClaim() && deviceId.equals(claimInfo.getDeviceId())) {
-                        orphanedTrips.add(claimInfo.getTripId());
-                        Log.i(TAG, "🚑 Found orphaned trip: " + claimInfo.getTripId() + " claimed by this device");
+                    for (com.google.firebase.firestore.QueryDocumentSnapshot doc : queryDocumentSnapshots) {
+                        String tripId = doc.getId();
+                        String status = doc.getString("status");
+                        orphanedTripIds.add(tripId);
+                        Log.i(TAG, "🚑 Found orphaned trip: " + tripId + " (status: " + status + ") claimed by this device");
                     }
-                }
-            }
+                    
+                    if (orphanedTripIds.isEmpty()) {
+                        Log.i(TAG, "✅ No orphaned trips found for device: " + deviceId);
+                    } else {
+                        Log.w(TAG, "🚑 FOUND " + orphanedTripIds.size() + " ORPHANED TRIP(S): " + orphanedTripIds);
+                        
+                        // Handle each orphaned trip
+                        for (String tripId : orphanedTripIds) {
+                            handleOrphanedTripWithFirestore(tripId, deviceId);
+                        }
+                    }
+                    
+                    Log.i(TAG, "✅ Orphaned trip recovery completed");
+                })
+                .addOnFailureListener(e -> {
+                    Log.e(TAG, "Error finding orphaned trips with Firestore", e);
+                });
             
         } catch (Exception e) {
-            Log.e(TAG, "Error finding orphaned trips", e);
+            Log.e(TAG, "Error in findOrphanedTripsWithFirestore", e);
         }
-        
-        return orphanedTrips;
     }
     
     /**
-     * Handle an orphaned trip by releasing it back to available
+     * Handle an orphaned trip by releasing it back to available using Firestore
      */
-    private void handleOrphanedTrip(String tripId, String deviceId) {
+    private void handleOrphanedTripWithFirestore(String tripId, String deviceId) {
         Log.i(TAG, "🚑 HANDLING ORPHANED TRIP: " + tripId + " (device: " + deviceId + ")");
         
         try {
@@ -446,15 +518,21 @@ public class EasyDeliveryApplication extends Application {
                 Log.i(TAG, "🧩 Cleared TRIPID reference: " + tripId);
             }
             
-            // Use UnifiedTripManager to properly release the trip
-            boolean released = tripManager.releaseTrip(tripId, "Orphaned trip recovery on startup");
-            
-            if (released) {
-                Log.i(TAG, "✅ ORPHANED TRIP RELEASED: " + tripId + " moved back to available");
+            // Use FirestoreSyncManager to properly release the trip
+            if (firestoreSyncManager != null) {
+                firestoreSyncManager.releaseTrip(tripId, "Orphaned trip recovery on startup")
+                    .addOnSuccessListener(success -> {
+                        if (success) {
+                            Log.i(TAG, "✅ ORPHANED TRIP RELEASED: " + tripId + " moved back to available");
+                        } else {
+                            Log.w(TAG, "⚠️ Failed to release orphaned trip: " + tripId);
+                        }
+                    })
+                    .addOnFailureListener(e -> {
+                        Log.e(TAG, "Error releasing orphaned trip: " + tripId, e);
+                    });
             } else {
-                Log.w(TAG, "⚠️ Failed to release orphaned trip via UnifiedTripManager: " + tripId);
-                Log.e(TAG, "❌ No fallback available - orphaned trip cleanup failed for: " + tripId);
-                Log.e(TAG, "🔍 Manual intervention may be required to move trip back to available folder");
+                Log.e(TAG, "❌ FirestoreSyncManager not available for orphaned trip cleanup: " + tripId);
             }
             
         } catch (Exception e) {
