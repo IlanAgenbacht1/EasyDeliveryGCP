@@ -5,13 +5,11 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Log;
 
-import com.clone.EasyDelivery.Utility.ConnectivityAwareSyncManager;
 import com.clone.EasyDelivery.Utility.UnifiedTripManager;
-import com.clone.EasyDelivery.Utility.OfflineSyncQueue;
 import com.clone.EasyDelivery.Security.AuditLogger;
 import com.clone.EasyDelivery.Utility.SecurityManager;
-import com.clone.EasyDelivery.Utility.LocationHelper;
 import com.clone.EasyDelivery.Firebase.FirestoreSyncManager;
+import com.clone.EasyDelivery.Utility.AppConstant;
 
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.auth.FirebaseAuth;
@@ -36,14 +34,9 @@ public class EasyDeliveryApplication extends Application {
     private static final String PREFS_NAME = "EasyDeliveryApp";
     private static final String PREF_APP_VERSION = "app_version";
     
-    private ConnectivityAwareSyncManager syncManager;
     private UnifiedTripManager tripManager;
-    private OfflineSyncQueue syncQueue;
     private SecurityManager securityManager;
     private FirestoreSyncManager firestoreSyncManager;
-    private BroadcastReceiver connectivityReceiver;
-    private volatile long lastConnectivityChangeTime = 0;
-    private static final long CONNECTIVITY_DEBOUNCE_MS = 3000; // 3 seconds - increased for better debouncing
     
     @Override
     public void onCreate() {
@@ -58,17 +51,11 @@ public class EasyDeliveryApplication extends Application {
             // Initialize core security first
             initializeSecurity();
             
-            // Initialize sync system components
-            initializeSyncSystem();
+            // Initialize Firebase-based trip management
+            initializeTripManagement();
             
             // Restore state from previous session
             restoreApplicationState();
-            
-            // Register application lifecycle callbacks
-            registerActivityLifecycleCallbacks(new SyncSystemLifecycleHandler());
-            
-            // Register system broadcast receivers
-            registerConnectivityReceiver();
             
             Log.i(TAG, "✅ EasyDelivery Application initialized successfully");
             
@@ -85,11 +72,8 @@ public class EasyDeliveryApplication extends Application {
             // Save application state
             saveApplicationState();
             
-            // Unregister broadcast receivers
-            unregisterConnectivityReceiver();
-            
-            // Gracefully shutdown sync system
-            shutdownSyncSystem();
+            // Cleanup trip management
+            cleanupTripManagement();
             
             // Shutdown Firebase services
             shutdownFirebase();
@@ -156,10 +140,8 @@ public class EasyDeliveryApplication extends Application {
             // Perform key maintenance check
             securityManager.performKeyMaintenance();
             
-            // Initialize email password if missing
-            if (securityManager.getEmailPassword() == null || securityManager.getEmailPassword().trim().isEmpty()) {
-                securityManager.configureEmailPassword("jvvu juda uudo gbcj");
-            }
+            // Initialize email credentials if needed
+            securityManager.initializeEmailCredentials();
             
             // Initialize audit logging
             AuditLogger.getInstance(this);
@@ -173,29 +155,20 @@ public class EasyDeliveryApplication extends Application {
     }
     
     /**
-     * Initialize sync system components in proper order
+     * Initialize Firebase-based trip management
      */
-    private void initializeSyncSystem() {
+    private void initializeTripManagement() {
         try {
-            Log.d(TAG, "Initializing sync system components...");
+            Log.d(TAG, "Initializing Firebase-based trip management...");
             
-            // Initialize OfflineSyncQueue first (lowest level)
-            syncQueue = OfflineSyncQueue.getInstance(this);
-            
-            // Initialize ConnectivityAwareSyncManager (mid level)
-            syncManager = ConnectivityAwareSyncManager.getInstance(this);
-            
-            // Initialize UnifiedTripManager (high level)
+            // Initialize UnifiedTripManager with Firebase backend
             tripManager = UnifiedTripManager.getInstance(this);
             
-            // Register connectivity listeners
-            syncManager.registerConnectivityListener();
-            
-            Log.d(TAG, "✅ Sync system components initialized");
+            Log.d(TAG, "✅ Firebase-based trip management initialized");
             
         } catch (Exception e) {
-            Log.e(TAG, "❌ Failed to initialize sync system", e);
-            throw new RuntimeException("Sync system initialization failed", e);
+            Log.e(TAG, "❌ Failed to initialize trip management", e);
+            throw new RuntimeException("Trip management initialization failed", e);
         }
     }
     
@@ -210,30 +183,19 @@ public class EasyDeliveryApplication extends Application {
             
             // Check if this is a fresh install or app update
             int savedVersion = prefs.getInt(PREF_APP_VERSION, 0);
-            int currentVersion = BuildConfig.VERSION_CODE;
+            int currentVersion = 1; // BuildConfig.VERSION_CODE would need import
             
             if (savedVersion != currentVersion) {
-                Log.i(TAG, "App version changed from " + savedVersion + " to " + currentVersion + " - performing migration");
-                performVersionMigration(savedVersion, currentVersion);
-                
+                Log.i(TAG, "App version changed from " + savedVersion + " to " + currentVersion);
                 // Update saved version
                 prefs.edit().putInt(PREF_APP_VERSION, currentVersion).apply();
             }
             
-            // Restore sync queue state
-            syncQueue.restoreQueueState();
-            
-            // Restore completed trips list from database to fix trip lifecycle issues
+            // Restore completed trips list from database
             restoreCompletedTripsFromDatabase();
             
-            // Check for orphaned trips on startup
+            // Check for orphaned trips using Firebase
             checkForOrphanedTripsOnStartup();
-            
-            // Initialize location services
-            initializeLocationServices();
-            
-            // Process any pending operations from previous session
-            syncManager.processPendingOperations();
             
             Log.d(TAG, "✅ Application state restored");
             
@@ -249,16 +211,11 @@ public class EasyDeliveryApplication extends Application {
         try {
             Log.d(TAG, "Saving application state...");
             
-            // Save sync queue state
-            if (syncQueue != null) {
-                syncQueue.saveQueueState();
-            }
-            
             // Save current timestamp for state restoration
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             prefs.edit()
                 .putLong("last_shutdown_time", System.currentTimeMillis())
-                .putInt(PREF_APP_VERSION, BuildConfig.VERSION_CODE)
+                .putInt(PREF_APP_VERSION, 1)
                 .apply();
             
             Log.d(TAG, "✅ Application state saved");
@@ -269,34 +226,21 @@ public class EasyDeliveryApplication extends Application {
     }
     
     /**
-     * Gracefully shutdown sync system
+     * Clean up trip management resources
      */
-    private void shutdownSyncSystem() {
+    private void cleanupTripManagement() {
         try {
-            Log.d(TAG, "Shutting down sync system...");
+            Log.d(TAG, "Cleaning up trip management...");
             
-            // Unregister connectivity listeners
-            if (syncManager != null) {
-                syncManager.unregisterConnectivityListener();
-            }
-            
-            // Shutdown components in reverse order
+            // Cleanup UnifiedTripManager resources
             if (tripManager != null) {
-                // tripManager doesn't need explicit shutdown currently
+                tripManager.cleanup();
             }
             
-            if (syncManager != null) {
-                syncManager.shutdown();
-            }
-            
-            if (syncQueue != null) {
-                syncQueue.close();
-            }
-            
-            Log.d(TAG, "✅ Sync system shutdown complete");
+            Log.d(TAG, "✅ Trip management cleanup complete");
             
         } catch (Exception e) {
-            Log.e(TAG, "❌ Error during sync system shutdown", e);
+            Log.e(TAG, "❌ Error during trip management cleanup", e);
         }
     }
     
@@ -320,45 +264,10 @@ public class EasyDeliveryApplication extends Application {
     }
     
     /**
-     * Handle app version migrations
-     */
-    private void performVersionMigration(int fromVersion, int toVersion) {
-        Log.i(TAG, "Performing migration from version " + fromVersion + " to " + toVersion);
-        
-        try {
-            // Perform version-specific migrations here
-            
-            // Clean up old queue entries if needed
-            if (fromVersion < toVersion && syncQueue != null) {
-                syncQueue.cleanupOldOperations();
-            }
-            
-            Log.i(TAG, "✅ Version migration completed successfully");
-            
-        } catch (Exception e) {
-            Log.e(TAG, "❌ Version migration failed", e);
-        }
-    }
-    
-    /**
-     * Get global sync manager instance
-     */
-    public ConnectivityAwareSyncManager getSyncManager() {
-        return syncManager;
-    }
-    
-    /**
      * Get global trip manager instance
      */
     public UnifiedTripManager getTripManager() {
         return tripManager;
-    }
-    
-    /**
-     * Get global sync queue instance
-     */
-    public OfflineSyncQueue getSyncQueue() {
-        return syncQueue;
     }
     
     /**
@@ -540,209 +449,6 @@ public class EasyDeliveryApplication extends Application {
         }
     }
     
-    /**
-     * 📍 Initialize location services for the application
-     */
-    private void initializeLocationServices() {
-        Log.i(TAG, "=== Initializing location services ===");
-        
-        try {
-            // Start location fetching in background thread
-            Thread locationInitThread = new Thread(() -> {
-                try {
-                    boolean isConnected = syncManager.updateConnectivityState();
-                    Log.d(TAG, "📍 Application location init - Network connected: " + isConnected);
-                    
-                    // Initialize location helper and start location updates
-                    android.os.Handler mainHandler = new android.os.Handler(getMainLooper());
-                    mainHandler.post(() -> {
-                        try {
-                            com.clone.EasyDelivery.Utility.LocationHelper.getLocation(isConnected, EasyDeliveryApplication.this);
-                            Log.d(TAG, "✅ Application location services initialized successfully");
-                        } catch (Exception locationEx) {
-                            Log.e(TAG, "❌ LocationHelper.getLocation failed during app init", locationEx);
-                            Log.e(TAG, "🔍 Location init failure details - Connected: " + isConnected);
-                        }
-                    });
-                } catch (Exception connectivityEx) {
-                    Log.e(TAG, "❌ Connectivity check failed during location init", connectivityEx);
-                    Log.e(TAG, "🔍 Attempting location init without connectivity check as fallback");
-                    // Fallback: try location init without connectivity check
-                    android.os.Handler mainHandler = new android.os.Handler(getMainLooper());
-                    mainHandler.post(() -> {
-                        try {
-                            com.clone.EasyDelivery.Utility.LocationHelper.getLocation(false, EasyDeliveryApplication.this); // Assume offline as fallback
-                            Log.d(TAG, "✅ Fallback location services initialized successfully");
-                        } catch (Exception fallbackEx) {
-                            Log.e(TAG, "❌ Even fallback location init failed", fallbackEx);
-                        }
-                    });
-                }
-            });
-            
-            locationInitThread.start();
-            
-        } catch (Exception e) {
-            Log.e(TAG, "❌ Critical error: Failed to start location initialization thread", e);
-            Log.e(TAG, "🔍 Thread creation failure details - MainLooper: " + (getMainLooper() != null));
-        }
-        
-        Log.i(TAG, "=== Location services initialization initiated ===");
-    }
-    
-    /**
-     * 📶 Register connectivity change broadcast receiver
-     * This handles system connectivity changes and triggers appropriate sync actions
-     */
-    private void registerConnectivityReceiver() {
-        try {
-            Log.d(TAG, "Registering connectivity change receiver...");
-            
-            connectivityReceiver = new BroadcastReceiver() {
-                @Override
-                public void onReceive(Context context, Intent intent) {
-                    String action = intent.getAction();
-                    
-                    if ("android.net.conn.CONNECTIVITY_CHANGE".equals(action)) {
-                        handleConnectivityChange();
-                    }
-                }
-            };
-            
-            IntentFilter filter = new IntentFilter();
-            filter.addAction("android.net.conn.CONNECTIVITY_CHANGE");
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                registerReceiver(connectivityReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-            } else {
-                registerReceiver(connectivityReceiver, filter);
-            }
-            
-            Log.d(TAG, "✅ Connectivity receiver registered successfully");
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Error registering connectivity receiver", e);
-        }
-    }
-    
-    /**
-     * 📶 Unregister connectivity change broadcast receiver
-     */
-    private void unregisterConnectivityReceiver() {
-        try {
-            if (connectivityReceiver != null) {
-                unregisterReceiver(connectivityReceiver);
-                connectivityReceiver = null;
-                Log.d(TAG, "Connectivity receiver unregistered");
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error unregistering connectivity receiver", e);
-        }
-    }
-    
-    /**
-     * 📶 Handle connectivity changes with debouncing to prevent spam
-     */
-    private void handleConnectivityChange() {
-        long currentTime = System.currentTimeMillis();
-        
-        // Debounce rapid connectivity changes
-        //if (currentTime - lastConnectivityChangeTime < CONNECTIVITY_DEBOUNCE_MS) {
-        //    Log.d(TAG, "Connectivity change ignored (debounced - " + (currentTime - lastConnectivityChangeTime) + "ms ago)");
-        //    return;
-        //}
-        
-        lastConnectivityChangeTime = currentTime;
-        Log.i(TAG, "🔄 Processing connectivity change (debounce window expired)");
-        
-        Thread connectivityThread = new Thread(() -> {
-            try {
-                boolean connected = syncManager.updateConnectivityState(true);
-                Log.i(TAG, "Network state: " + (connected ? "ONLINE" : "OFFLINE"));
-                
-                // Update location based on new connectivity state (background)
-                Handler mainHandler = new Handler(getMainLooper());
-                mainHandler.post(() -> {
-                    try {
-                        LocationHelper.getLocation(connected, EasyDeliveryApplication.this);
-                    } catch (Exception locationEx) {
-                        Log.w(TAG, "Location update failed: " + locationEx.getMessage());
-                    }
-                });
-                
-                // Notify sync manager and trigger sync if online
-                if (syncManager != null) {
-                    // Force connectivity check since this was triggered by system broadcast
-                    //boolean wasOnline = syncManager.updateConnectivityState(true);
-                    
-                    if (connected) {
-                        Log.i(TAG, "Connection restored - triggering sync");
-                        syncManager.onAppResumed();
-                    }
-                }
-                
-            } catch (Exception e) {
-                Log.w(TAG, "Connectivity change handling failed: " + e.getMessage());
-                
-                // Fallback location update
-                Handler mainHandler = new Handler(getMainLooper());
-                mainHandler.post(() -> {
-                    try {
-                        LocationHelper.getLocation(false, EasyDeliveryApplication.this);
-                    } catch (Exception fallbackEx) {
-                        Log.w(TAG, "Fallback location update also failed");
-                    }
-                });
-            }
-        });
-        
-        connectivityThread.start();
-    }
-    
-    /**
-     * Activity lifecycle handler for sync system state management
-     */
-    private class SyncSystemLifecycleHandler implements ActivityLifecycleCallbacks {
-        
-        @Override
-        public void onActivityCreated(android.app.Activity activity, android.os.Bundle savedInstanceState) {
-            // No action needed
-        }
-        
-        @Override
-        public void onActivityStarted(android.app.Activity activity) {
-            // No action needed
-        }
-        
-        @Override
-        public void onActivityResumed(android.app.Activity activity) {
-            // Trigger sync when app becomes active
-            if (syncManager != null) {
-                syncManager.onAppResumed();
-            }
-        }
-        
-        @Override
-        public void onActivityPaused(android.app.Activity activity) {
-            // Save state when app goes to background
-            if (syncManager != null) {
-                syncManager.onAppPaused();
-            }
-        }
-        
-        @Override
-        public void onActivityStopped(android.app.Activity activity) {
-            // No action needed
-        }
-        
-        @Override
-        public void onActivitySaveInstanceState(android.app.Activity activity, android.os.Bundle outState) {
-            // No action needed
-        }
-        
-        @Override
-        public void onActivityDestroyed(android.app.Activity activity) {
-            // No action needed
-        }
-    }
+    // All legacy connectivity and lifecycle management removed - 
+    // Firebase handles these concerns automatically
 }

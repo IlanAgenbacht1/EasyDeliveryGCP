@@ -28,10 +28,14 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.clone.EasyDelivery.Adapter.TripAdapter;
 import com.clone.EasyDelivery.R;
 import com.clone.EasyDelivery.Utility.AppConstant;
-import com.clone.EasyDelivery.Utility.ConnectivityAwareSyncManager;
 import com.clone.EasyDelivery.Utility.ScheduleHelper;
 // SyncConstant merged into AppConstant
 import com.clone.EasyDelivery.Utility.UnifiedTripManager;
+import com.clone.EasyDelivery.Firebase.Models.FirestoreTrip;
+import com.google.firebase.auth.FirebaseAuth;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 import com.clone.EasyDelivery.databinding.ActivityTripDashBinding;
 
 import java.util.ArrayList;
@@ -148,25 +152,31 @@ public class TripDash extends AppCompatActivity {
         tripUpdateRunnable = new Runnable() {
             @Override
             public void run() {
-                new Thread(() -> {
-                    try {
-                        ArrayList<String> newTrips = ScheduleHelper.getLocalTrips(TripDash.this);
-
+                // Use modern Firestore async API
+                UnifiedTripManager tripManager = UnifiedTripManager.getInstance(TripDash.this);
+                
+                tripManager.getAvailableTrips()
+                    .thenAccept(firestoreTrips -> {
+                        // Convert FirestoreTrips to trip IDs for UI
+                        ArrayList<String> newTrips = firestoreTrips.stream()
+                            .map(FirestoreTrip::getTripId)
+                            .collect(Collectors.toCollection(ArrayList::new));
+                        
                         textHandler.post(() -> {
                             try {
                                 // 🔧 STABILITY: Only update UI if trips actually changed
                                 boolean tripsChanged = !newTrips.equals(lastKnownTrips);
                                 
                                 if (tripsChanged) {
-                                    Log.i("TripDash", "🔄 STABLE_UI: Trip list changed from " + lastKnownTrips.size() + " to " + newTrips.size() + " trips");
-                                    Log.d("TripDash", "🔄 STABLE_UI: Previous: " + lastKnownTrips + ", New: " + newTrips);
+                                    Log.i("TripDash", "🔄 FIRESTORE_UI: Trip list changed from " + lastKnownTrips.size() + " to " + newTrips.size() + " trips");
+                                    Log.d("TripDash", "🔄 FIRESTORE_UI: Previous: " + lastKnownTrips + ", New: " + newTrips);
                                     
                                     adapter.updateTrips(newTrips);
                                     lastKnownTrips = new ArrayList<>(newTrips);
                                     stableUpdateCount = 0;
                                 } else {
                                     stableUpdateCount++;
-                                    Log.v("TripDash", "🔄 STABLE_UI: No changes detected (stable for " + (stableUpdateCount * 5) + "s)");
+                                    Log.v("TripDash", "🔄 FIRESTORE_UI: No changes detected (stable for " + (stableUpdateCount * 5) + "s)");
                                 }
 
                                 if (!newTrips.isEmpty() && !layoutAnimated) {
@@ -183,7 +193,7 @@ public class TripDash extends AppCompatActivity {
                                     title.setVisibility(View.VISIBLE);
                                     layoutAnimated = true;
                                 } else if (newTrips.isEmpty()) {
-                                    checkConnectivity();
+                                    checkFirebaseConnectivity();
                                 }
                                 
                             } catch (Exception e) {
@@ -205,12 +215,15 @@ public class TripDash extends AppCompatActivity {
                             
                             textHandler.postDelayed(this, nextPollInterval);
                         });
-                        
-                    } catch (Exception e) {
-                        Log.e("TripDash", "Error in trip fetching loop", e);
-                        textHandler.postDelayed(this, 10000);
-                    }
-                }).start();
+                    })
+                    .exceptionally(throwable -> {
+                        Log.e("TripDash", "Error fetching trips from Firestore", throwable);
+                        textHandler.post(() -> {
+                            checkFirebaseConnectivity();
+                            textHandler.postDelayed(this, 10000); // Retry in 10 seconds
+                        });
+                        return null;
+                    });
             }
         };
         // Start the first run
@@ -218,12 +231,14 @@ public class TripDash extends AppCompatActivity {
     }
 
 
-    private void checkConnectivity() {
-        ConnectivityAwareSyncManager syncManager = ConnectivityAwareSyncManager.getInstance(TripDash.this);
-        boolean isOnline = syncManager.isOnline();
-
-        if (!isOnline) {
-            title.setText("OFFLINE - NO TRIPS AVAILABLE");
+    private void checkFirebaseConnectivity() {
+        UnifiedTripManager tripManager = UnifiedTripManager.getInstance(TripDash.this);
+        String syncStatus = tripManager.getSyncStatus();
+        
+        if (FirebaseAuth.getInstance().getCurrentUser() == null) {
+            title.setText("NOT AUTHENTICATED - PLEASE LOGIN");
+        } else if (syncStatus.contains("not available")) {
+            title.setText("FIREBASE UNAVAILABLE - NO TRIPS");
         } else {
             title.setText("NO TRIPS AVAILABLE");
         }

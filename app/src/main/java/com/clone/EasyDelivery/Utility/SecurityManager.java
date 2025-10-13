@@ -34,10 +34,7 @@ public class SecurityManager {
     private static final String KEYSTORE_ALIAS = "EasyDeliveryMasterKey";
     private static final String ENCRYPTED_PREFS_NAME = "secure_preferences";
 
-    // Key aliases for different types of credentials
-    private static final String DROPBOX_TOKEN_KEY = "dropbox_refresh_token";
-    private static final String DROPBOX_APP_KEY = "dropbox_app_key";
-    private static final String DROPBOX_SECRET_KEY = "dropbox_app_secret";
+    // Key aliases for different types of credentials  
     private static final String EMAIL_PASSWORD_KEY = "email_password";
     private static final String SIGNATURE_ENCRYPTION_KEY = "signature_key";
 
@@ -241,48 +238,7 @@ public class SecurityManager {
         return decryptedValue != null ? decryptedValue : defaultValue;
     }
 
-    /**
-     * Store Dropbox credentials securely
-     * @deprecated Dropbox integration replaced by Firebase. This method is no longer used.
-     */
-    @Deprecated
-    public void storeDropboxCredentials(String refreshToken, String appKey, String appSecret) {
-        try {
-            storeSecureValue(DROPBOX_TOKEN_KEY, refreshToken);
-            storeSecureValue(DROPBOX_APP_KEY, appKey);
-            storeSecureValue(DROPBOX_SECRET_KEY, appSecret);
-            Log.d(TAG, "Dropbox credentials stored securely");
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to store Dropbox credentials", e);
-        }
-    }
-
-    /**
-     * Retrieve Dropbox refresh token
-     * @deprecated Dropbox integration replaced by Firebase. This method is no longer used.
-     */
-    @Deprecated
-    public String getDropboxRefreshToken() {
-        return getSecureValue(DROPBOX_TOKEN_KEY, null);
-    }
-
-    /**
-     * Retrieve Dropbox app key
-     * @deprecated Dropbox integration replaced by Firebase. This method is no longer used.
-     */
-    @Deprecated
-    public String getDropboxAppKey() {
-        return getSecureValue(DROPBOX_APP_KEY, null);
-    }
-
-    /**
-     * Retrieve Dropbox app secret
-     * @deprecated Dropbox integration replaced by Firebase. This method is no longer used.
-     */
-    @Deprecated
-    public String getDropboxAppSecret() {
-        return getSecureValue(DROPBOX_SECRET_KEY, null);
-    }
+    // Dropbox credential methods have been removed - app now uses Firebase only
 
     /**
      * Store email credentials securely
@@ -721,20 +677,14 @@ public class SecurityManager {
      * Validate that all required credentials are present
      */
     public boolean validateCredentials() {
-        String refreshToken = getDropboxRefreshToken();
-        String appKey = getDropboxAppKey();
-        String appSecret = getDropboxAppSecret();
         String emailPassword = getEmailPassword();
-
-        boolean valid = refreshToken != null && !refreshToken.isEmpty() &&
-                appKey != null && !appKey.isEmpty() &&
-                appSecret != null && !appSecret.isEmpty() &&
-                emailPassword != null && !emailPassword.isEmpty();
-
+        
+        boolean valid = emailPassword != null && !emailPassword.isEmpty();
+        
         if (!valid) {
-            Log.w(TAG, "Credential validation failed - some credentials are missing");
+            Log.w(TAG, "Credential validation failed - email password is missing");
         }
-
+        
         return valid;
     }
 
@@ -762,23 +712,12 @@ public class SecurityManager {
     }
 
     /**
-     * Initialize credentials from BuildConfig (migration from old system)
+     * Initialize email credentials if not already present
      */
-    public void initializeFromBuildConfig(String refreshToken, String appKey, String appSecret) {
-        // Only store if not already present
-        if (getDropboxRefreshToken() == null) {
-            storeDropboxCredentials(refreshToken, appKey, appSecret);
-            Log.d(TAG, "Migrated credentials from BuildConfig to secure storage");
-        }
-
+    public void initializeEmailCredentials() {
         // Initialize email credentials with secure defaults
         if (getEmailPassword() == null || getEmailPassword().trim().isEmpty()) {
-            // This should be replaced with proper credential management
-            // For now, using a placeholder - this needs to be configured by administrator
             Log.w(TAG, "Email password is not configured. Please set it using SecurityManager.storeEmailCredentials()");
-            
-            // Temporary fallback - you should replace this with the actual email password
-            // storeEmailCredentials("dev@easydelivery.biz", "YOUR_APP_PASSWORD_HERE");
         }
     }
 
@@ -1043,11 +982,9 @@ public class SecurityManager {
     public String getSecurityStatus() {
         StringBuilder status = new StringBuilder();
         status.append("Security Level: ").append(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? "Hardware-backed" : "Software").append("\n");
-        status.append("Dropbox Token: ").append(getDropboxRefreshToken() != null ? "✓" : "✗").append("\n");
-        status.append("Dropbox App Key: ").append(getDropboxAppKey() != null ? "✓" : "✗").append("\n");
-        status.append("Dropbox Secret: ").append(getDropboxAppSecret() != null ? "✓" : "✗").append("\n");
         status.append("Email Password: ").append(getEmailPassword() != null ? "✓" : "✗").append("\n");
         status.append("Signature Key: ").append(securePrefs.getString("signature_key_alias", null) != null ? "✓" : "✗").append("\n");
+        status.append("Firebase Auth: Available (replaced Dropbox)\n");
         status.append("\n--- Key Lifecycle ---\n");
         status.append(getKeyLifecycleStatus());
 
