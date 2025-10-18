@@ -8,25 +8,38 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.clone.EasyDelivery.Model.Delivery;
+import com.clone.EasyDelivery.data.entities.DeliveryEntity;
 import com.clone.EasyDelivery.R;
-import com.clone.EasyDelivery.Utility.AppConstant;
+import com.clone.EasyDelivery.viewmodel.UserStateViewModel;
 
 import java.util.List;
 
+/**
+ * HeaderAdapter for displaying delivery documents in RecyclerView
+ * Updated to use UserStateViewModel instead of AppConstants
+ */
 public class HeaderAdapter extends RecyclerView.Adapter<HeaderAdapter.CustomerViewHolder> {
 
-    private List<Delivery> documents;
+    private List<DeliveryEntity> deliveries;
     private OnItemClickListener listener;
+    private UserStateViewModel userStateViewModel; // Modern approach
     private ImageView imageViewExclamation;
 
     public interface OnItemClickListener {
-        void onItemClick(Delivery delivery);
+        void onItemClick(DeliveryEntity delivery);
     }
 
-    public HeaderAdapter(List<Delivery> documents, OnItemClickListener listener) {
-        this.documents = documents;
+    public HeaderAdapter(List<DeliveryEntity> deliveries, OnItemClickListener listener) {
+        this.deliveries = deliveries;
         this.listener = listener;
+        this.userStateViewModel = null; // Will be set via setter
+    }
+
+    /**
+     * Set UserStateViewModel for state access
+     */
+    public void setUserStateViewModel(UserStateViewModel userStateViewModel) {
+        this.userStateViewModel = userStateViewModel;
     }
 
     @NonNull
@@ -39,13 +52,13 @@ public class HeaderAdapter extends RecyclerView.Adapter<HeaderAdapter.CustomerVi
 
     @Override
     public void onBindViewHolder(@NonNull CustomerViewHolder holder, int position) {
-        Delivery delivery = documents.get(position);
-        holder.bind(delivery, listener);
+        DeliveryEntity delivery = deliveries.get(position);
+        holder.bind(delivery, listener, userStateViewModel);
     }
 
     @Override
     public int getItemCount() {
-        return documents.size();
+        return deliveries.size();
     }
 
     public static class CustomerViewHolder extends RecyclerView.ViewHolder {
@@ -62,17 +75,17 @@ public class HeaderAdapter extends RecyclerView.Adapter<HeaderAdapter.CustomerVi
             imageViewExclamation = itemView.findViewById(R.id.iv_exclamation);
         }
 
-        public void bind(final Delivery delivery, final OnItemClickListener listener) {
-            documentNumberTextView.setText(delivery.getDocument());
+        public void bind(final DeliveryEntity delivery, final OnItemClickListener listener, UserStateViewModel userStateViewModel) {
+            documentNumberTextView.setText(delivery.getDeliveryId());
             customerNameTextView.setText(delivery.getCustomerName());
-            customerAddressTextView.setText(delivery.getAddress());
+            customerAddressTextView.setText(delivery.getDeliveryAddress());
 
-            if (AppConstant.SAVED_DOCUMENT != null && AppConstant.SAVED_DOCUMENT.equals(delivery.getDocument())) {
+            // Use UserStateViewModel instead of AppConstants
+            String currentDocument = userStateViewModel != null ? userStateViewModel.getCurrentDocumentValue() : "";
 
+            if (currentDocument != null && currentDocument.equals(delivery.getDeliveryId())) {
                 itemView.setBackgroundResource(R.drawable.dash_border_red);
-            }
-            else {
-
+            } else {
                 itemView.setBackgroundResource(R.drawable.dash_border);
             }
 

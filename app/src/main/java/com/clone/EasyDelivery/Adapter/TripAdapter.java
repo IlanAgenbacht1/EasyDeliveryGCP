@@ -12,8 +12,6 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.clone.EasyDelivery.R;
-import com.clone.EasyDelivery.Utility.AppConstant;
-import com.clone.EasyDelivery.Utility.JsonHandler;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -149,9 +147,9 @@ public class TripAdapter extends RecyclerView.Adapter<TripAdapter.TripViewHolder
         public void bind(final String tripName, final TripAdapter.OnItemClickListener listener) {
             int deliveryCount = 0;
 
-            if (!AppConstant.completedTrips.contains(tripName)) {
-                deliveryCount = JsonHandler.returnDeliveryCount(itemView.getContext(), tripName);
-            }
+            // Note: Delivery count will be handled by API data in future updates
+            // For now, show minimal placeholder count until API integration is complete
+            deliveryCount = 1; // Default placeholder
 
             tripNumberTextView.setText(tripName);
 
@@ -162,7 +160,6 @@ public class TripAdapter extends RecyclerView.Adapter<TripAdapter.TripViewHolder
             }
 
             itemView.setOnClickListener(v -> listener.onItemClick(tripName));
-
         }
     }
 }

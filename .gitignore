@@ -12,3 +12,6 @@
 .DS_Store
 .env
 .vscode
+
+# Security: Never commit service account keys
+app/src/main/assets/service-account-key.json

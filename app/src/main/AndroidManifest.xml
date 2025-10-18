@@ -10,7 +10,6 @@
 
     <uses-feature android:name="android.hardware.camera" />
 
-    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
@@ -43,9 +42,13 @@
             android:name=".Activity.Preview"
             android:theme="@style/MaterialActionBar" />
         <activity
-            android:name=".Activity.SplashLogin"
-            android:exported="true"
+            android:name=".Activity.AuthActivity"
             android:theme="@style/Material" >
+        </activity>
+        <activity
+            android:name=".Activity.SplashLogin"
+            android:theme="@style/Material"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
@@ -57,7 +60,6 @@
             android:requestLegacyExternalStorage="true"
             android:theme="@style/MaterialActionBar"
             android:windowSoftInputMode="stateHidden|adjustPan" />
-        <activity android:name=".MainActivity" />
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
             android:screenOrientation="portrait"
@@ -76,8 +78,6 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
-
-        <!-- SyncService removed - functionality moved to EasyDeliveryApplication and operation classes -->
     </application>
 
 </manifest>

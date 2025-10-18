@@ -1,7 +1,11 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
-    <style name="Base.AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Base.AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- Customize your dark theme here. -->
-        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
+        <item name="colorPrimary">@color/theme</item>
+        <item name="colorPrimaryDark">@color/theme</item>
+        <item name="colorAccent">@color/gold</item>
+        <item name="android:windowContentTransitions" tools:ignore="NewApi">true</item>
+        <item name="android:navigationBarColor">@color/theme</item>
     </style>
 </resources>

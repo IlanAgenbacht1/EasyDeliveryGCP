@@ -1,5 +1,6 @@
 apply plugin: 'com.android.application'
 apply plugin: 'com.google.gms.google-services'
+apply plugin: 'dagger.hilt.android.plugin'
 
 def localProps = new Properties()
 def localPropsFile = rootProject.file('local.properties')
@@ -19,7 +20,11 @@ android {
         versionName "1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        // Dropbox credentials removed - now using Firebase/Firestore
+        
+        // API Configuration
+        buildConfigField "String", "API_BASE_URL", '"https://delivery-cloud-api-833551875057.africa-south1.run.app/api/"'
+        buildConfigField "int", "API_TIMEOUT_SECONDS", "30"
+        buildConfigField "boolean", "API_DEBUG", "true"
     }
 
     buildTypes {
@@ -37,6 +42,14 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
     packagingOptions {
+        pickFirst 'META-INF/DEPENDENCIES'
+        pickFirst 'META-INF/LICENSE'
+        pickFirst 'META-INF/LICENSE.txt'
+        pickFirst 'META-INF/NOTICE'
+        pickFirst 'META-INF/NOTICE.txt'
+        pickFirst 'META-INF/ASL2.0'
+        exclude 'META-INF/ECLIPSEF.RSA'
+        exclude 'META-INF/ECLIPSEF.SF'
         exclude 'META-INF/NOTICE.md'
         exclude 'META-INF/LICENSE.md'
     }
@@ -57,24 +70,54 @@ dependencies {
     
     // Firebase services
     implementation 'com.google.firebase:firebase-firestore'
-    implementation 'com.google.firebase:firebase-auth'
     implementation 'com.google.firebase:firebase-storage'
     implementation 'com.google.firebase:firebase-analytics'
 
-    implementation 'com.google.android.material:material:1.12.0'
-    implementation 'com.squareup.okhttp3:okhttp:3.10.0'
+    implementation 'com.google.android.material:material:1.11.0'
+    
+    // Networking - Retrofit & OkHttp
+    implementation 'com.squareup.retrofit2:retrofit:2.9.0'
+    implementation 'com.squareup.retrofit2:converter-gson:2.9.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.squareup.okhttp3:logging-interceptor:4.12.0'
+    
+    // Room Database
+    implementation 'androidx.room:room-runtime:2.6.0'
+    implementation 'androidx.room:room-ktx:2.6.0'
+    implementation 'androidx.work:work-runtime:2.9.0'
+    annotationProcessor 'androidx.room:room-compiler:2.6.0'
+    
+    // Architecture Components
+    implementation 'androidx.lifecycle:lifecycle-viewmodel:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-livedata:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-common-java8:2.7.0'
+    
+    // Dependency Injection - Hilt
+    implementation 'com.google.dagger:hilt-android:2.48'
+    annotationProcessor 'com.google.dagger:hilt-compiler:2.48'
+    implementation 'androidx.hilt:hilt-work:1.1.0'
+    annotationProcessor 'androidx.hilt:hilt-compiler:1.1.0'
+
+    // Google Play Services
+    implementation 'com.google.android.gms:play-services-auth:20.7.0'
+
+    // Google Auth libraries for service account authentication
+    implementation 'com.google.auth:google-auth-library-oauth2-http:1.19.0'
+    implementation 'com.google.auth:google-auth-library-credentials:1.19.0'
+
+    // Gson
+    implementation 'com.google.code.gson:gson:2.10.1'
+
+    // Other UI libraries
     implementation 'me.relex:circleindicator:2.1.6'
     implementation 'com.squareup.picasso:picasso:2.5.2'
     implementation 'de.hdodenhof:circleimageview:3.1.0'
     implementation(name: 'signature-view-1.0', ext: 'aar')
     implementation 'androidx.appcompat:appcompat:1.7.0'
-    implementation 'me.relex:circleindicator:2.1.6'
-    implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'org.json:json:20240303'
 
     implementation group: 'org.eclipse.angus', name: 'jakarta.mail', version: '2.0.3'
 
-    // implementation 'com.dropbox.core:dropbox-core-sdk:5.4.0' // Removed - replaced with Firebase
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
     implementation 'com.google.zxing:core:3.2.0'
 
@@ -88,8 +131,9 @@ dependencies {
     implementation 'androidx.activity:activity:1.9.1'
     implementation 'com.google.android.datatransport:transport-api:3.2.0'
 
-    implementation 'androidx.security:security-crypto:1.0.0'
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
     implementation 'androidx.biometric:biometric:1.1.0'
+    implementation 'androidx.preference:preference:1.2.1'
 
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'

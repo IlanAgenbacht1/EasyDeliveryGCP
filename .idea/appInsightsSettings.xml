@@ -9,10 +9,10 @@
             <InsightsFilterSettings>
               <option name="connection">
                 <ConnectionSetting>
-                  <option name="appId" value="PLACEHOLDER" />
-                  <option name="mobileSdkAppId" value="" />
-                  <option name="projectId" value="" />
-                  <option name="projectNumber" value="" />
+                  <option name="appId" value="com.clone.EasyDelivery" />
+                  <option name="mobileSdkAppId" value="1:833551875057:android:8caddd7f3e0a59060fe250" />
+                  <option name="projectId" value="easydelivery-433910" />
+                  <option name="projectNumber" value="833551875057" />
                 </ConnectionSetting>
               </option>
               <option name="signal" value="SIGNAL_UNSPECIFIED" />

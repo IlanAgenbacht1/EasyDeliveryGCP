@@ -31,18 +31,40 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent"
             app:srcCompat="@drawable/easydelivery_logo" />
+
+        <TextView
+            android:id="@+id/tv_splash_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Checking authentication..."
+            android:textColor="@color/gold"
+            android:textSize="14sp"
+            android:alpha="0.8"
+            android:visibility="invisible"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/iv_splashLogo" />
     </androidx.constraintlayout.widget.ConstraintLayout>
 
-    <Button
+    <com.google.android.material.button.MaterialButton
         android:id="@+id/btn_login"
-        android:layout_width="110dp"
-        android:layout_height="60dp"
+        android:layout_width="wrap_content"
+        android:layout_height="56dp"
         android:layout_below="@+id/rl_main"
         android:layout_centerHorizontal="true"
-        android:layout_marginTop="45dp"
+        android:layout_marginTop="32dp"
+        android:minWidth="200dp"
         android:backgroundTint="@color/gold"
-        android:text="Proceed"
+        android:text="Continue"
         android:textColor="@color/theme"
+        android:textSize="16sp"
+        android:textAllCaps="false"
+        android:fontFamily="sans-serif-medium"
+        android:letterSpacing="0"
+        app:cornerRadius="28dp"
+        android:elevation="2dp"
+        style="@style/Widget.MaterialComponents.Button"
         android:visibility="gone"/>
 
     <ProgressBar
@@ -112,30 +134,34 @@
 
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/ll_driver"
-            style="@style/textInputLogin"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
             android:layout_width="match_parent"
             android:layout_height="60dp"
             android:layout_below="@id/ll_docu"
             android:layout_marginLeft="10dp"
             android:layout_marginTop="5dp"
             android:layout_marginRight="10dp"
+            android:hint="Select Driver"
             android:textColorHint="@color/gold"
+            app:boxStrokeColor="@color/gold"
+            app:hintTextColor="@color/gold"
             app:errorEnabled="true">
 
-            <com.google.android.material.textfield.TextInputEditText
+            <AutoCompleteTextView
                 android:id="@+id/et_driver"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:hint="DRIVER NAME"
-                android:inputType="text"
+                android:inputType="none"
+                android:focusable="false"
                 android:paddingHorizontal="10dp"
-                android:textColor="@color/white" />
+                android:textColor="@color/gold"
+                android:textColorHint="@color/gold"
+                android:dropDownHeight="200dp" />
 
         </com.google.android.material.textfield.TextInputLayout>
 
-
         <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/ll_vehicle"
+            android:id="@+id/ll_pin"
             style="@style/textInputLogin"
             android:layout_width="match_parent"
             android:layout_height="60dp"
@@ -144,16 +170,47 @@
             android:layout_marginTop="5dp"
             android:layout_marginRight="10dp"
             android:textColorHint="@color/gold"
+            android:visibility="gone"
             app:errorEnabled="true">
 
             <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_pin"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Pin"
+                android:inputType="numberPassword"
+                android:maxLength="4"
+                android:paddingHorizontal="10dp"
+                android:textColor="@color/white"
+                android:textColorHint="@color/gold" />
+
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/ll_vehicle"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:layout_below="@id/ll_pin"
+            android:layout_marginLeft="10dp"
+            android:layout_marginTop="5dp"
+            android:layout_marginRight="10dp"
+            android:hint="Select Vehicle"
+            android:textColorHint="@color/gold"
+            app:boxStrokeColor="@color/gold"
+            app:hintTextColor="@color/gold"
+            app:errorEnabled="true">
+
+            <AutoCompleteTextView
                 android:id="@+id/et_vehicle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:hint="VEHICLE NUMBER"
-                android:inputType="text"
+                android:inputType="none"
+                android:focusable="false"
                 android:paddingHorizontal="10dp"
-                android:textColor="@color/white" />
+                android:textColor="@color/gold"
+                android:textColorHint="@color/gold"
+                android:dropDownHeight="200dp" />
 
         </com.google.android.material.textfield.TextInputLayout>
 

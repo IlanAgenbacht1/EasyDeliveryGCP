@@ -15,16 +15,6 @@
         <domain includeSubdomains="false">127.0.0.1</domain>
     </domain-config>
 
-    <!-- Enhanced security for Dropbox API -->
-    <domain-config>
-        <domain includeSubdomains="true">dropbox.com</domain>
-        <domain includeSubdomains="true">api.dropboxapi.com</domain>
-        <domain includeSubdomains="true">content.dropboxapi.com</domain>
-        <trust-anchors>
-            <certificates src="system" />
-        </trust-anchors>
-    </domain-config>
-
     <!-- Enhanced security for Gmail SMTP -->
     <domain-config>
         <domain includeSubdomains="true">smtp.gmail.com</domain>

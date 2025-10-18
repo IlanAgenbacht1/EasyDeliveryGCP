@@ -9,11 +9,7 @@ import android.widget.AdapterView;
 import android.widget.ImageView;
 import android.widget.TextView;
 
-import com.clone.EasyDelivery.Database.DeliveryDb;
-import com.clone.EasyDelivery.Model.Delivery;
 import com.clone.EasyDelivery.R;
-
-import com.clone.EasyDelivery.Utility.AppConstant;
 
 import java.util.ArrayList;
 
@@ -58,10 +54,13 @@ public class ParcelAdapter extends RecyclerView.Adapter<ParcelAdapter.ViewHolder
             int startIndex = itemText.indexOf(" ") + 1; // finds the start index of the parcel number
             String parcelNumber = itemText.substring(startIndex);
 
-            holder.iv_check.setVisibility(AppConstant.uiValidatedParcels.contains(parcelNumber) ? View.VISIBLE : View.INVISIBLE);
-            holder.rl_main.setForeground(AppConstant.discrepancyParcels.contains(parcelNumber) ? context.getDrawable(R.drawable.parcel_discrepancy_border) : null);
+            // Modern validation logic - will be updated with ViewModel integration
+            holder.iv_check.setVisibility(View.INVISIBLE); // Placeholder
+            holder.rl_main.setForeground(null); // Placeholder
 
-            if (AppConstant.flaggedParcels.contains(parcelNumber)) {
+            // Modern flagged parcel logic - will be updated with ViewModel integration
+            boolean isParcelFlagged = false; // Placeholder
+            if (isParcelFlagged) {
 
                 holder.rl_main.setForeground(context.getDrawable(R.drawable.parcel_discrepancy_border_filled));
                 holder.iv_flag.setVisibility(View.VISIBLE);

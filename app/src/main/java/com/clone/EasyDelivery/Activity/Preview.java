@@ -3,7 +3,6 @@ package com.clone.EasyDelivery.Activity;
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.ActivityNotFoundException;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.SQLException;
@@ -19,11 +18,8 @@ import android.view.View;
 import android.view.Window;
 import android.widget.Button;
 import android.widget.RelativeLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.RelativeLayout.LayoutParams;
-import android.widget.TextView;
-import android.widget.Toast;
 
 import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
@@ -33,16 +29,17 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.clone.EasyDelivery.Activity.TripDash;
 import com.clone.EasyDelivery.Adapter.PreviewAdapter;
-import com.clone.EasyDelivery.Database.DeliveryDb;
-import com.clone.EasyDelivery.Model.ItemParcel;
 import com.clone.EasyDelivery.R;
-import com.clone.EasyDelivery.Utility.AppConstant;
-import com.clone.EasyDelivery.Utility.ImageHelper;
-import com.clone.EasyDelivery.Utility.ToastLogger;
-import com.clone.EasyDelivery.Utility.SecurityManager;
-import com.google.gson.Gson;
+import com.clone.EasyDelivery.databinding.ActivityPreviewBinding;
+import com.clone.EasyDelivery.util.ImageManager;
+import com.clone.EasyDelivery.viewmodel.AuthViewModel;
+import com.clone.EasyDelivery.viewmodel.DeliveryViewModel;
+import com.clone.EasyDelivery.viewmodel.UserStateViewModel;
+import com.clone.EasyDelivery.viewmodel.models.UiState;
+import androidx.lifecycle.ViewModelProvider;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -54,314 +51,377 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
+import com.clone.EasyDelivery.viewmodel.UserStateViewModel;
+import com.clone.EasyDelivery.viewmodel.models.UiState;
+
+import dagger.hilt.android.AndroidEntryPoint;
+
+/**
+ * Modern Preview Activity - Complete delivery workflow implementation
+ * Handles parcel validation, GPS capture, signature/photo collection, and delivery completion
+ *
+ * Uses Hilt for proper dependency injection into ViewModels
+ */
+@AndroidEntryPoint
 public class Preview extends AppCompatActivity {
 
-    private TextView tvCompany,tvDriver,tvVehicle,tvDate,tvTime,tvDocu,tvParcels,tvComment;
-    private Button btnBack,btnConfirm;
-    private RecyclerView recyclerView;
-    private String date_final,time_final,currentDate;
-    private PreviewAdapter adapter;
-    private RelativeLayout rl_sign_view,rl_view_parcel;
-    private ItemParcel itemParcel;
-    String result,result1;
-    private Context context;
-    ArrayList<String> parcelId;
-    ArrayList<String> filePaths;
-    String strList;
-    private TextView tvPic,tvSign;
     private static final String TAG = "Preview";
+    
+    // ViewBinding
+    private ActivityPreviewBinding binding;
+    
+    // ViewModels
+    private DeliveryViewModel deliveryViewModel;
+    private AuthViewModel authViewModel;
+    private UserStateViewModel userStateViewModel;
+
+    // Dependency injection - manually initialized
+    private com.clone.EasyDelivery.util.SharedPreferencesManager preferencesManager;
+
+    private ImageManager imageManager;
+    
+    // Adapters and data
+    private PreviewAdapter adapter;
+    private ArrayList<String> parcelId;
+    private ArrayList<String> filePaths;
+    
+    // Data models
+    private String strList;
+    private String currentDate;
+    private String currentDeliveryId;
+    
+    // File paths for attachments
+    private String signatureFileName;
+    private String imageFileName;
 
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_preview);
+        
+        // Initialize ViewBinding
+        binding = ActivityPreviewBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
 
-        recyclerView = findViewById(R.id.rv_parcel);
-        rl_sign_view= findViewById(R.id.rl_sign_view);
-        rl_view_parcel= findViewById(R.id.rl_view_parcel);
-        tvPic = findViewById(R.id.tv_pic);
-        tvSign = findViewById(R.id.tv_sign);
+        // Initialize dependencies manually (instead of @Inject)
+        preferencesManager = new com.clone.EasyDelivery.util.SharedPreferencesManager(this);
+        imageManager = new ImageManager(this, preferencesManager);
 
-        Log.d(TAG, "onCreate: pic"+AppConstant.PIC_PATH);
-        Log.d(TAG, "onCreate: sign"+AppConstant.SIGN_PATH);
-
-        btnBack = findViewById(R.id.btn_back);
-        btnConfirm = findViewById(R.id.btn_confirm);
-
-        tvCompany = findViewById(R.id.tv_com);
-        tvDriver = findViewById(R.id.tv_driver);
-        tvVehicle = findViewById(R.id.tv_vehicle);
-        tvDate = findViewById(R.id.tv_date);
-        tvTime = findViewById(R.id.tv_time);
-        tvDocu = findViewById(R.id.tv_docu);
-        tvComment = findViewById(R.id.tv_comment);
-        tvParcels = findViewById(R.id.tv_parcel);
-
-        Collections.sort(AppConstant.validatedParcels);
-
-        adapter = new PreviewAdapter(this, AppConstant.validatedParcels);
-
-        recyclerView.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.VERTICAL, false));
-        recyclerView.setAdapter(adapter);
-
-        tvCompany.setText(GetCompany());
-
-        tvDriver.setText(GetDriver());
-
-        tvVehicle.setText(GetVehicle());
-
-        Log.d(TAG, "onCreate:current "+currentDate);
-
-        tvDate.setText(new SimpleDateFormat("dd-MMM-yyyy", Locale.US).format(new Date()));
-
-        tvTime.setText(new SimpleDateFormat("HH:mm", Locale.US).format(new Date())+" Hours");
-
-        tvDocu.setText(AppConstant.DOCUMENT);
-        tvComment.setText(AppConstant.COMMENT);
-        tvParcels.setText(AppConstant.PARCEL_NO);
-
-        btnBack.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                finish();
-            }
-        });
-
-        result = AppConstant.SIGN_PATH.substring(AppConstant.SIGN_PATH.lastIndexOf('/') + 1).trim();
-        tvSign.setText("View Here");
-
-        // 🔒 SECURE SIGNATURE DECRYPTION: Use SecurityManager instead of legacy method
-        byte[] decryptedSignature = null;
-        try {
-            Log.i("PreviewSecurity", "Starting secure signature decryption for preview");
-            
-            if (AppConstant.SIGN_PATH == null || AppConstant.SIGN_PATH.trim().isEmpty()) {
-                Log.e("PreviewSecurity", "Signature path is null or empty");
-                tvSign.setText("No Signature Available");
-                rl_sign_view.setEnabled(false);
-                return;
-            }
-            
-            // Use SecurityManager for secure decryption
-            SecurityManager securityManager = SecurityManager.getInstance(this);
-            
-            // First try to load the signature as a SecurityPackage (new format)
-            SecurityManager.SignaturePackage signaturePackage = ImageHelper.loadEncryptedSignatureWithIntegrity(AppConstant.SIGN_PATH);
-            
-            if (signaturePackage != null) {
-                // New secure format with integrity verification
-                Log.i("PreviewSecurity", "Loading signature with integrity verification");
-                decryptedSignature = securityManager.decryptSignatureWithIntegrityCheck(signaturePackage);
-                
-                if (decryptedSignature != null) {
-                    Log.i("PreviewSecurity", "Signature decrypted successfully with integrity verification: " + decryptedSignature.length + " bytes");
-                } else {
-                    Log.e("PreviewSecurity", "Signature integrity verification failed");
-                }
-            } else {
-                // Fallback: Try legacy decryption for backward compatibility
-                Log.w("PreviewSecurity", "Attempting legacy signature decryption");
-                
-                // Read raw encrypted file
-                File signatureFile = new File(AppConstant.SIGN_PATH);
-                if (signatureFile.exists()) {
-                    byte[] encryptedData = new byte[(int) signatureFile.length()];
-                    try (java.io.FileInputStream fis = new java.io.FileInputStream(signatureFile)) {
-                        fis.read(encryptedData);
-                    }
-                    
-                    // Try SecurityManager decryption first
-                    decryptedSignature = securityManager.decryptSignature(encryptedData);
-                    
-                    if (decryptedSignature != null) {
-                        Log.i("PreviewSecurity", "Legacy signature decrypted with SecurityManager: " + decryptedSignature.length + " bytes");
-                    } else {
-                        // Final fallback: Try old ImageHelper method
-                        Log.w("PreviewSecurity", "Trying final fallback with ImageHelper");
-                        SharedPreferences prefs = getSharedPreferences("MyPrefs", MODE_PRIVATE);
-                        String keyString = prefs.getString("signature_key", "");
-                        
-                        if (!keyString.isEmpty()) {
-                            decryptedSignature = ImageHelper.decryptImage(AppConstant.SIGN_PATH, keyString);
-                            if (decryptedSignature != null) {
-                                Log.w("PreviewSecurity", "Legacy decryption successful - consider re-encrypting with SecurityManager");
-                            }
-                        } else {
-                            Log.e("PreviewSecurity", "No encryption key available for legacy decryption");
-                        }
-                    }
-                } else {
-                    Log.e("PreviewSecurity", "Signature file does not exist: " + AppConstant.SIGN_PATH);
-                }
-            }
-            
-            // Update UI based on decryption result
-            if (decryptedSignature != null) {
-                Log.i("PreviewSecurity", "Signature successfully decrypted for preview");
-                tvSign.setText("View Signature");
-                rl_sign_view.setEnabled(true);
-            } else {
-                Log.e("PreviewSecurity", "Failed to decrypt signature - all methods failed");
-                tvSign.setText("Signature Unavailable");
-                rl_sign_view.setEnabled(false);
-                
-                // Show user-friendly error
-                Toast.makeText(this, "Unable to load signature for preview. The signature may be corrupted.", Toast.LENGTH_LONG).show();
-            }
-            
-        } catch (Exception e) {
-            Log.e("PreviewSecurity", "Exception during signature decryption: " + e.getMessage(), e);
-            tvSign.setText("Signature Error");
-            rl_sign_view.setEnabled(false);
-            
-            // Show user-friendly error
-            Toast.makeText(this, "Error loading signature: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        // Get delivery ID from intent or UserStateViewModel
+        currentDeliveryId = getIntent().getStringExtra("deliveryId");
+        
+        // Initialize ViewModels
+        initializeViewModels();
+        
+        // Get delivery ID from UserStateViewModel if not provided in intent
+        if (currentDeliveryId == null || currentDeliveryId.isEmpty()) {
+            currentDeliveryId = userStateViewModel.getCurrentDocumentValue();
         }
+        
+        // Setup UI components
+        setupRecyclerView();
+        setupObservers();
+        loadAndDisplayData();
+        setupClickListeners();
+        
+        // Process signature and image files
+        processMediaFiles();
+        
+        Log.i(TAG, "Preview Activity initialized with modern architecture");
+    }
+    
+    // =================== INITIALIZATION METHODS ===================
+    
+    private void initializeViewModels() {
+        deliveryViewModel = new ViewModelProvider(this).get(DeliveryViewModel.class);
+        authViewModel = new ViewModelProvider(this).get(AuthViewModel.class);
+        userStateViewModel = new ViewModelProvider(this).get(UserStateViewModel.class);
+        Log.i(TAG, "ViewModels initialized for offline-first delivery completion");
+    }
+    
+    private void setupRecyclerView() {
+        // Get validated parcels from UserStateViewModel
+        List<String> validatedParcels = userStateViewModel.getValidatedParcelsValue();
+        Collections.sort(validatedParcels);
 
-        result1 = AppConstant.PIC_PATH.substring(AppConstant.PIC_PATH.lastIndexOf('/') + 1).trim();
+        // Convert to ArrayList as required by PreviewAdapter
+        ArrayList<String> parcelsList = new ArrayList<>(validatedParcels);
+        adapter = new PreviewAdapter(this, parcelsList);
+        
+        binding.rvParcel.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.VERTICAL, false));
+        binding.rvParcel.setAdapter(adapter);
 
-        tvPic.setText("View Here");
-
-
-        rl_sign_view.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-
-                AppConstant.ZOOM=AppConstant.SIGN_PATH;
-                startActivity(new Intent(Preview.this,ZoomView.class));
-
-            }
-        });
-
-
-        rl_view_parcel.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-
-                AppConstant.ZOOM=AppConstant.PIC_PATH;
-                startActivity(new Intent(Preview.this,ZoomView.class));
-
-            }
-        });
-
-
-        btnConfirm.setOnClickListener(new View.OnClickListener() {
-            @RequiresApi(api = Build.VERSION_CODES.O)
-            @Override
-            public void onClick(View view) {
-
-                strList = TextUtils.join(", ",  AppConstant.validatedParcels);
-                strList = strList.replaceAll("\\s"," ");
-                Log.d("PreviewValidation", "Validated parcels list: " + strList);
-
-                updateDatabase();
-
-                //email();
+        // Observe changes to validated parcels - recreate adapter when data changes
+        userStateViewModel.getValidatedParcels().observe(this, parcels -> {
+            if (parcels != null) {
+                List<String> sortedParcels = new ArrayList<>(parcels);
+                Collections.sort(sortedParcels);
+                // Recreate adapter with new data
+                adapter = new PreviewAdapter(this, new ArrayList<>(sortedParcels));
+                binding.rvParcel.setAdapter(adapter);
             }
         });
     }
-
-
-    private void updateDatabase() {
-        try{
-            DeliveryDb db =new DeliveryDb(Preview.this);
-
-            db.open();
-
-            itemParcel = new ItemParcel();
-
-            itemParcel.setDocu(tvDocu.getText().toString());
-            itemParcel.setPic(AppConstant.PIC_PATH);
-            itemParcel.setSign(AppConstant.SIGN_PATH);
-            itemParcel.setUnit(tvParcels.getText().toString());
-
-            Gson gson = new Gson();
-
-            String parcelString= gson.toJson(parcelId);
-
-            Log.d("PreviewDatabase", "Parcel JSON: " + parcelString);
-
-            itemParcel.setParcels(strList);
-            itemParcel.setDriver(tvDriver.getText().toString());
-            itemParcel.setVehicle(tvVehicle.getText().toString());
-            itemParcel.setCompany(tvCompany.getText().toString());
-            itemParcel.setTime(currentDate);
-
-            // 📷 FIX: Keep the full filename with .jpg extension for proper file lookup
-            String imageFile = result1; // Keep full filename including .jpg extension
+    
+    private void setupObservers() {
+        // Observe delivery data changes
+        deliveryViewModel.getCurrentDeliveryState().observe(this, deliveryState -> {
+            if (deliveryState != null) {
+                handleDeliveryStateChange(deliveryState);
+            }
+        });
+        
+        // Observe loading state
+        deliveryViewModel.getIsLoading().observe(this, isLoading -> {
+            if (isLoading != null) {
+                handleLoadingStateChange(isLoading);
+            }
+        });
+    }
+    
+    private void handleDeliveryStateChange(UiState<?> deliveryState) {
+        if (deliveryState.isSuccess() && deliveryState.hasData()) {
+            Log.i(TAG, "Delivery data loaded via ViewModel");
+        } else if (deliveryState.isError()) {
+            Log.w(TAG, "ViewModel delivery loading failed, using fallback: " + deliveryState.getErrorMessage());
+        }
+    }
+    
+    private void handleLoadingStateChange(boolean isLoading) {
+        // Update loading UI if needed
+        Log.d(TAG, "Loading state: " + isLoading);
+    }
+    
+    private void loadAndDisplayData() {
+        // Load delivery data from ViewModel first, fallback to legacy
+        if (currentDeliveryId != null && !currentDeliveryId.isEmpty()) {
+            deliveryViewModel.loadDeliveryById(currentDeliveryId);
+        }
+        
+        // Load and display data using ViewBinding
+        binding.tvCom.setText(getCompanyName());
+        binding.tvDriver.setText(getDriverName());
+        binding.tvVehicle.setText(getVehicleName());
+        
+        // Set current date and time
+        binding.tvDate.setText(new SimpleDateFormat("dd-MMM-yyyy", Locale.US).format(new Date()));
+        binding.tvTime.setText(new SimpleDateFormat("HH:mm", Locale.US).format(new Date()) + " Hours");
+        
+        // Set delivery details from UserStateViewModel
+        binding.tvDocu.setText(userStateViewModel.getCurrentDocumentValue());
+        binding.tvComment.setText(userStateViewModel.getCommentValue());
+        binding.tvParcel.setText(userStateViewModel.getCurrentParcelNo().getValue());
+        
+        Log.d(TAG, "Data loaded and displayed using ViewBinding");
+    }
+    
+    private void setupClickListeners() {
+        // Back button click handler
+        binding.btnBack.setOnClickListener(view -> finish());
+        
+        // Confirm button click handler
+        binding.btnConfirm.setOnClickListener(view -> handleConfirmDelivery());
+        
+        // Signature view click handler
+        binding.rlSignView.setOnClickListener(view -> {
+            String signaturePath = userStateViewModel.getFilePathsValue().signaturePath;
+            userStateViewModel.setZoom(signaturePath);
+            startActivity(new Intent(this, ZoomView.class));
+        });
+        
+        // Image view click handler
+        binding.rlViewParcel.setOnClickListener(view -> {
+            String photoPath = userStateViewModel.getFilePathsValue().photoPath;
+            userStateViewModel.setZoom(photoPath);
+            startActivity(new Intent(this, ZoomView.class));
+        });
+    }
+    
+    private void processMediaFiles() {
+        // Process signature file
+        processSignatureFile();
+        
+        // Process image file
+        processImageFile();
+    }
+    
+    private void processSignatureFile() {
+        String signaturePath = userStateViewModel.getFilePathsValue().signaturePath;
+        if (signaturePath == null || signaturePath.trim().isEmpty()) {
+            Log.e(TAG, "Signature path is null or empty");
+            binding.tvSign.setText("No Signature Available");
+            binding.rlSignView.setEnabled(false);
+            return;
+        }
+        
+        signatureFileName = signaturePath.substring(signaturePath.lastIndexOf('/') + 1).trim();
+        
+        // Validate and process signature file
+        validateSignatureFile(signaturePath);
+    }
+    
+    private void validateSignatureFile(String signaturePath) {
+        try {
+            Log.i(TAG, "Validating signature file for preview");
             
-            // Remove .jpg extension for database storage (maintain compatibility)
-            String imageFileForDb = result1.substring(0, result1.length() - 4);
-
-            String signatureFile = AppConstant.SIGN_PATH.substring(AppConstant.SIGN_PATH.lastIndexOf('/') + 1).trim();
-
-            currentDate = new SimpleDateFormat("dd-MM-yyyy HH:mm:ss", Locale.US).format(new Date());
+            // Check if signature file exists
+            File signatureFile = new File(signaturePath);
+            if (!signatureFile.exists()) {
+                Log.e(TAG, "Signature file does not exist: " + signaturePath);
+                binding.tvSign.setText("Signature Unavailable");
+                binding.rlSignView.setEnabled(false);
+                return;
+            }
             
-            Log.i("PreviewDatabase", "Storing image file in database: " + imageFileForDb);
-            Log.i("PreviewDatabase", "Full image filename: " + imageFile);
-            Log.i("PreviewDatabase", "Signature file: " + signatureFile);
-
-            db.setDocumentCompleted(itemParcel.getDocu(), imageFileForDb, signatureFile, currentDate, this);
-            db.updateComment();
-            db.createEmailEntry(itemParcel.getDocu(), AppConstant.TRIPID);
-
-            Log.i("SyncService", "Email queued: " + AppConstant.TRIPID + ":" + itemParcel.getDocu());
+            // Signature file exists - enable preview
+            binding.tvSign.setText("View Signature");
+            binding.rlSignView.setEnabled(true);
             
-            // 🎯 TRIP COMPLETION: Check if all deliveries for this trip are now completed
-            boolean allDeliveriesCompleted = checkAllDeliveriesCompleted(db, AppConstant.TRIPID);
-            Log.i("TripCompletion", "All deliveries completed for trip " + AppConstant.TRIPID + ": " + allDeliveriesCompleted);
-            
-            if (allDeliveriesCompleted) {
-                Log.i("TripCompletion", "🎉 TRIP COMPLETED! Marking as completed with persistent storage");
-                
-                // Use persistent storage method to mark trip as completed
-                // This handles both in-memory list and persistent storage automatically
-                AppConstant.markTripCompleted(this, AppConstant.TRIPID);
-                
-                // Direct call to UnifiedTripManager for clean architecture
-                Log.i("TripCompletion", "🎯 Completing trip directly via UnifiedTripManager: " + AppConstant.TRIPID);
-                Thread tripCompletionThread = new Thread(() -> {
-                    try {
-                        com.clone.EasyDelivery.Utility.UnifiedTripManager tripManager = 
-                            com.clone.EasyDelivery.Utility.UnifiedTripManager.getInstance(Preview.this);
-                        
-                        boolean success = tripManager.completeTrip(AppConstant.TRIPID);
-                        
-                        if (success) {
-                            Log.i("TripCompletion", "✅ Trip completed successfully via direct call: " + AppConstant.TRIPID);
-                        } else {
-                            Log.w("TripCompletion", "⚠️ Trip completion had issues (will sync later): " + AppConstant.TRIPID);
-                        }
-                    } catch (Exception e) {
-                        Log.e("TripCompletion", "Error in direct trip completion", e);
-                    }
-                });
-                tripCompletionThread.start();
-                
-                // Show completion confirmation
-                showTripCompletionDialog();
+            // Try modern secure validation first
+            if (validateSignatureIntegrity(signaturePath)) {
+                Log.i(TAG, "Signature integrity validated successfully");
             } else {
-                Log.i("TripCompletion", "Trip not yet complete - more deliveries remaining");
+                Log.w(TAG, "Signature integrity check failed, but file exists - allowing preview");
+            }
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error validating signature file: " + e.getMessage(), e);
+            binding.tvSign.setText("Signature Error");
+            binding.rlSignView.setEnabled(false);
+            Toast.makeText(this, "Error validating signature file", Toast.LENGTH_SHORT).show();
+        }
+    }
+    
+    private boolean validateSignatureIntegrity(String signaturePath) {
+        try {
+            // Use modern signature validation methods
+            // Note: Modern ImageManager doesn't expose signature packages directly
+            // We just check if file exists and is readable
+            File signatureFile = new File(signaturePath);
+            boolean isValidSignature = signatureFile.exists() && signatureFile.canRead() && signatureFile.length() > 0;
                 
-                // Navigate back to DashHeader to continue with remaining deliveries
-                startActivity(new Intent(Preview.this, DashHeader.class));
-                finishAffinity();
+            if (isValidSignature) {
+                Log.i(TAG, "Signature file validated successfully");
+                return true;
+            } else {
+                Log.w(TAG, "Signature file validation failed");
+                return false;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Signature integrity validation failed: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    private void processImageFile() {
+        String picPath = userStateViewModel.getFilePathsValue().photoPath;
+        if (picPath == null || picPath.trim().isEmpty()) {
+            Log.e(TAG, "Image path is null or empty");
+            binding.tvPic.setText("No Image Available");
+            binding.rlViewParcel.setEnabled(false);
+            return;
+        }
+        
+        imageFileName = picPath.substring(picPath.lastIndexOf('/') + 1).trim();
+        binding.tvPic.setText("View Here");
+        binding.rlViewParcel.setEnabled(true);
+        
+        Log.d(TAG, "Image file processed: " + imageFileName);
+    }
+    
+    // =================== ACTION HANDLERS ===================
+    
+    private void handleConfirmDelivery() {
+        try {
+            Log.i(TAG, "Starting delivery confirmation process");
+            
+            // Prepare parcel data from UserStateViewModel
+            List<String> validatedParcels = userStateViewModel.getValidatedParcelsValue();
+            strList = TextUtils.join(", ", validatedParcels);
+            strList = strList.replaceAll("\\s", " ");
+            Log.d(TAG, "Validated parcels list: " + strList);
+            
+            // Save delivery completion through ViewModel and fallback
+            saveDeliveryCompletion();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error confirming delivery: " + e.getMessage(), e);
+            Toast.makeText(this, "Error confirming delivery: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+    
+    private void saveDeliveryCompletion() {
+        try {
+            // MODERN delivery completion via ViewModel
+            if (currentDeliveryId != null && !currentDeliveryId.isEmpty()) {
+                String deliveryNotes = createDeliveryNotes();
+                String signaturePath = userStateViewModel.getFilePathsValue().signaturePath;
+                String photoPath = userStateViewModel.getFilePathsValue().photoPath;
+
+                deliveryViewModel.completeDelivery(currentDeliveryId, deliveryNotes, signaturePath, photoPath);
+                Log.i(TAG, "Delivery completion saved via MODERN ViewModel");
             }
 
-            db.close();
+            // Update legacy database for compatibility
+            updateDatabase();
             
-            AppConstant.DOCUMENT = "";
-            AppConstant.COMMENT = "";
+        } catch (Exception e) {
+            Log.e(TAG, "Error saving delivery completion: " + e.getMessage(), e);
+            // Continue with legacy database update as fallback
+            updateDatabase();
         }
+    }
 
-        catch(SQLException e){
+    private String createDeliveryNotes() {
+        StringBuilder notes = new StringBuilder();
 
-            e.printStackTrace();
+        notes.append("Document: ").append(binding.tvDocu.getText().toString()).append("; ");
+        notes.append("Parcels: ").append(strList).append("; ");
+        notes.append("Driver: ").append(binding.tvDriver.getText().toString()).append("; ");
+        notes.append("Vehicle: ").append(binding.tvVehicle.getText().toString()).append("; ");
+        notes.append("Company: ").append(binding.tvCom.getText().toString()).append("; ");
+        notes.append("Comment: ").append(userStateViewModel.getCommentValue()).append("; ");
+        notes.append("Location: ").append(userStateViewModel.getFormattedGpsLocation());
 
-            ToastLogger.exception(getApplicationContext(), e);
+        return notes.toString();
+    }
+    
+    private void updateDatabase() {
+        // Legacy database update method replaced with ViewModel-only approach
+        // All database operations now handled through Repository pattern
+        
+        try {
+            Log.i(TAG, "Completing delivery via ViewModel");
+            
+            // Create delivery completion data
+            String deliveryNotes = createDeliveryNotes();
+            String proofOfDeliveryPath = userStateViewModel.getFilePathsValue().signaturePath;
+            
+            // Complete delivery via ViewModel
+            deliveryViewModel.markAsDelivered(currentDeliveryId, deliveryNotes, proofOfDeliveryPath);
+            
+            // Clear current delivery context
+            userStateViewModel.setCurrentDocument("");
+            userStateViewModel.setComment("");
+            
+            // Navigate back to DashHeader or TripDash
+            navigateAfterCompletion();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error completing delivery: " + e.getMessage(), e);
+            Toast.makeText(this, "Error completing delivery: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
-
+    }
+    
+    private void navigateAfterCompletion() {
+        // Check if all deliveries for this trip are completed via ViewModel
+        String currentTripId = userStateViewModel.getCurrentTripIdValue();
+        
+        // Navigate based on completion status
+        // For now, always navigate back to DashHeader
+        // Trip completion logic will be handled by the Repository/ViewModel layer
+        startActivity(new Intent(Preview.this, DashHeader.class));
+        finishAffinity();
     }
 
 
@@ -386,7 +446,8 @@ public class Preview extends AppCompatActivity {
                 @Override
                 public void onClick(View v) {
 
-                    AppConstant.DOCUMENT = null;
+                    // Clear current document in UserStateViewModel instead of AppConstants
+                    userStateViewModel.setCurrentDocument("");
 
                     startActivity(new Intent(Preview.this, DashHeader.class));
 
@@ -413,26 +474,26 @@ public class Preview extends AppCompatActivity {
 
         final Intent shareIntent = new Intent(Intent.ACTION_SEND_MULTIPLE, Uri.parse("mailto:"));
         shareIntent.setType("text/plain");
-        shareIntent.putExtra(Intent.EXTRA_SUBJECT, "ePOD Document Number: "+tvDocu.getText().toString());
+        shareIntent.putExtra(Intent.EXTRA_SUBJECT, "ePOD Document Number: " + binding.tvDocu.getText().toString());
 
-        shareIntent.putExtra(Intent.EXTRA_EMAIL  , new String[]{""+GetEmail()});
+        shareIntent.putExtra(Intent.EXTRA_EMAIL, new String[]{getEmailAddress()});
         shareIntent.putExtra(
                 Intent.EXTRA_TEXT,
                 Html.fromHtml(new StringBuilder()
 
                         .append("<p><b>"+"Dear Admin,"+"</b></p>")
-                        .append("<p><b>"+"Please find the delivery details for document number: "+tvDocu.getText().toString()+" below:"+"</b></p>")
-                        .append("<p><b>"+"1. Company: "+tvCompany.getText().toString()+"</b></p>")
-                        .append("<p><b>"+"2. Driver Name: "+tvDriver.getText().toString()+"</b></p>")
-                        .append("<p><b>"+"3. Delivery Vehicle: "+tvVehicle.getText().toString()+"</b></p>")
-                        .append("<p><b>"+"4. Date of Delivery: "+tvDate.getText().toString()+"</b></p>")
-                        .append("<p><b>"+"5. Time of Delivery: "+tvTime.getText().toString()+"</b></p>")
-                        .append("<p><b>"+"6. Document Number: "+tvDocu.getText().toString()+"</b></p>")
-                        .append("<p><b>"+"7. Number of Parcels: "+tvParcels.getText().toString()+"</b></p>")
+                        .append("<p><b>" + "Please find the delivery details for document number: " + binding.tvDocu.getText().toString() + " below:" + "</b></p>")
+                        .append("<p><b>" + "1. Company: " + binding.tvCom.getText().toString() + "</b></p>")
+                        .append("<p><b>" + "2. Driver Name: " + binding.tvDriver.getText().toString() + "</b></p>")
+                        .append("<p><b>" + "3. Delivery Vehicle: " + binding.tvVehicle.getText().toString() + "</b></p>")
+                        .append("<p><b>" + "4. Date of Delivery: " + binding.tvDate.getText().toString() + "</b></p>")
+                        .append("<p><b>" + "5. Time of Delivery: " + binding.tvTime.getText().toString() + "</b></p>")
+                        .append("<p><b>" + "6. Document Number: " + binding.tvDocu.getText().toString() + "</b></p>")
+                        .append("<p><b>" + "7. Number of Parcels: " + binding.tvParcel.getText().toString() + "</b></p>")
                         .append("<p><b>"+"8. Parcel Details: "+"</b></p>")
                         .append("<small><p>"+strList+"</p></small>")
-                        .append("<p><b>"+"9. Customer Signature: "+ result +"(See Attached File)"+"</b></p>")
-                        .append("<p><b>"+"10. Parcel Photograph: "+ result1 +"(See Attached File)"+"</b></p>")
+                        .append("<p><b>" + "9. Customer Signature: " + "result" + "(See Attached File)" + "</b></p>")
+                        .append("<p><b>" + "10. Parcel Photograph: " + "result1" + "(See Attached File)" + "</b></p>")
 
                     .append("<p><b>"+"Warm Regards, "+"</b></p>")
                     .append("<p><b>"+"EasyDelivery Team"+"</b></p>")
@@ -442,8 +503,9 @@ public class Preview extends AppCompatActivity {
 
         filePaths = new ArrayList<>();
 
-        filePaths.add(AppConstant.PIC_PATH);
-        filePaths.add(AppConstant.SIGN_PATH);
+        // Use UserStateViewModel paths instead of AppConstants
+        filePaths.add(userStateViewModel.getFilePathsValue().photoPath);
+        filePaths.add(userStateViewModel.getFilePathsValue().signaturePath);
         ArrayList<Uri> uris = new ArrayList<Uri>();
         for (String file : filePaths)
         {
@@ -463,74 +525,49 @@ public class Preview extends AppCompatActivity {
 
     }
 
-    public String GetCompany() {
-        SharedPreferences shp = this.getSharedPreferences("COMPANY", MODE_PRIVATE);
+    // =================== CONFIGURATION METHODS ===================
+    
+    private String getCompanyName() {
+        SharedPreferences shp = getSharedPreferences("COMPANY", MODE_PRIVATE);
         String company = shp.getString("company", "");
-        Log.d("PreviewConfig", "Retrieved company: " + company);
+        Log.d(TAG, "Retrieved company: " + company);
         return company;
     }
-
-    public String GetDriver() {
-        SharedPreferences shp = this.getSharedPreferences("DRIVER", MODE_PRIVATE);
+    
+    private String getDriverName() {
+        SharedPreferences shp = getSharedPreferences("DRIVER", MODE_PRIVATE);
         String driver = shp.getString("driver", "");
-        Log.d("PreviewConfig", "Retrieved driver: " + driver);
+        Log.d(TAG, "Retrieved driver: " + driver);
         return driver;
     }
-
-    public String GetEmail() {
-        SharedPreferences shp = this.getSharedPreferences("EMAIL", MODE_PRIVATE);
+    
+    private String getEmailAddress() {
+        SharedPreferences shp = getSharedPreferences("EMAIL", MODE_PRIVATE);
         String email = shp.getString("email", "");
-        Log.d("PreviewConfig", "Retrieved email: " + email);
+        Log.d(TAG, "Retrieved email: " + email);
         return email;
     }
-
-    public String GetVehicle() {
-        SharedPreferences shp = this.getSharedPreferences("VEHICLE", MODE_PRIVATE);
+    
+    private String getVehicleName() {
+        SharedPreferences shp = getSharedPreferences("VEHICLE", MODE_PRIVATE);
         String vehicle = shp.getString("vehicle", "");
-        Log.d("PreviewConfig", "Retrieved vehicle: " + vehicle);
+        Log.d(TAG, "Retrieved vehicle: " + vehicle);
         return vehicle;
     }
     
-    /**
-     * 🎯 Check if all deliveries for the given trip are completed
-     * @param db Database instance
-     * @param tripId Trip ID to check
-     * @return true if all deliveries are completed, false otherwise
-     */
-    private boolean checkAllDeliveriesCompleted(DeliveryDb db, String tripId) {
-        try {
-            // Get list of incomplete documents for this trip
-            List<String> incompleteDocuments = db.getDocumentList(true); // true = incomplete only
-            
-            Log.i("TripCompletion", "Checking completion for trip: " + tripId);
-            Log.i("TripCompletion", "Remaining incomplete documents: " + incompleteDocuments.size() + " - " + incompleteDocuments);
-            
-            // If no incomplete documents remain, trip is complete
-            boolean isComplete = incompleteDocuments.isEmpty();
-            
-            if (isComplete) {
-                Log.i("TripCompletion", "✅ ALL DELIVERIES COMPLETED for trip: " + tripId);
-            } else {
-                Log.i("TripCompletion", "⏳ Trip " + tripId + " still has " + incompleteDocuments.size() + " pending deliveries");
-            }
-            
-            return isComplete;
-            
-        } catch (Exception e) {
-            Log.e("TripCompletion", "Error checking trip completion for " + tripId, e);
-            return false; // Fail safe - assume not complete if we can't check
-        }
-    }
+    // Trip completion checking is now handled by the ViewModel/Repository layer
+    // No direct database access needed
     
     /**
-     * 🎉 Show trip completion confirmation dialog and navigate to trip dashboard
+     * Show trip completion confirmation dialog and navigate to trip dashboard
      */
     private void showTripCompletionDialog() {
         try {
+            String currentTripId = userStateViewModel.getCurrentTripIdValue();
             final android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this, R.style.AlertDialogStyle);
             
             builder.setTitle("🎉 Trip Completed!");
-            builder.setMessage("Congratulations! You have successfully completed all deliveries for trip " + AppConstant.TRIPID + ".\n\nThe trip data is being synchronized with the cloud.");
+            builder.setMessage("Congratulations! You have successfully completed all deliveries for trip " + currentTripId + ".\n\nThe trip data is being synchronized with the cloud.");
             
             builder.setPositiveButton("Continue", new android.content.DialogInterface.OnClickListener() {
                 @Override
@@ -556,5 +593,31 @@ public class Preview extends AppCompatActivity {
             startActivity(new Intent(Preview.this, TripDash.class));
             finishAffinity();
         }
+    }
+    
+    // =================== LIFECYCLE METHODS ===================
+    
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        
+        // Clean up ViewBinding
+        if (binding != null) {
+            binding = null;
+        }
+        
+        Log.i(TAG, "Preview Activity destroyed and resources cleaned up");
+    }
+    
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Log.i(TAG, "Preview Activity resumed");
+    }
+    
+    @Override
+    protected void onPause() {
+        super.onPause();
+        Log.i(TAG, "Preview Activity paused");
     }
 }

@@ -5,162 +5,221 @@ import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.os.Bundle;
+import android.util.Log;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
 
 import com.clone.EasyDelivery.Adapter.HeaderAdapter;
-import com.clone.EasyDelivery.Database.DeliveryDb;
-import com.clone.EasyDelivery.Model.Delivery;
 import com.clone.EasyDelivery.R;
-import com.clone.EasyDelivery.Utility.AppConstant;
-import com.clone.EasyDelivery.Utility.ScheduleHelper;
-// SyncConstant merged into AppConstant
-import com.clone.EasyDelivery.Utility.ToastLogger;
-
-import android.util.Log;
+import com.clone.EasyDelivery.databinding.ActivityDashHeaderBinding;
+import com.clone.EasyDelivery.viewmodel.AuthViewModel;
+import com.clone.EasyDelivery.viewmodel.DeliveryViewModel;
+import com.clone.EasyDelivery.viewmodel.UserStateViewModel;
+import com.clone.EasyDelivery.viewmodel.models.UiState;
+import com.clone.EasyDelivery.data.entities.DeliveryEntity;
 
 import java.util.ArrayList;
 import java.util.List;
 
+import dagger.hilt.android.AndroidEntryPoint;
+
+/**
+ * Modern DashHeader Activity using ViewModels for offline-first delivery management
+ * Displays deliveries list and handles navigation to detailed delivery views
+ *
+ * Uses Hilt for proper dependency injection into ViewModels
+ */
+@AndroidEntryPoint
 public class DashHeader extends AppCompatActivity {
 
-    RecyclerView recyclerView;
-    HeaderAdapter adapter;
-    List<Delivery> deliveryList;
-    DeliveryDb database;
+    private static final String TAG = "DashHeader";
+    
+    // ViewBinding
+    private ActivityDashHeaderBinding binding;
+    
+    // Adapters and data
+    private HeaderAdapter adapter;
+    private List<DeliveryEntity> deliveryList;
+    
+    // ViewModels
+    private DeliveryViewModel deliveryViewModel;
+    private AuthViewModel authViewModel;
+    private UserStateViewModel userStateViewModel;
+
+    // Dependency injection - manually initialized
+    private com.clone.EasyDelivery.util.SharedPreferencesManager preferencesManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        
+        // Initialize ViewBinding
+        binding = ActivityDashHeaderBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
 
-        setContentView(R.layout.activity_dash_header);
+        // Initialize dependencies manually (instead of @Inject)
+        preferencesManager = new com.clone.EasyDelivery.util.SharedPreferencesManager(this);
 
-        recyclerView = findViewById(R.id.rvDocument);
-        recyclerView.setLayoutManager(new LinearLayoutManager(this));
+        // Setup RecyclerView
+        binding.rvDocument.setLayoutManager(new LinearLayoutManager(this));
 
+        // Initialize data
         deliveryList = new ArrayList<>();
+        
+        // Initialize ViewModels
+        initializeViewModels();
+        
+        // Setup adapter with modern click handling
+        setupModernAdapter();
+        
+        binding.rvDocument.setAdapter(adapter);
+        
+        // Setup observers and load deliveries
+        setupObservers();
+        loadDeliveriesUsingViewModel();
+        
+        Log.i(TAG, "✅ INSTANT: Trip " + getCurrentTripId() + " ready with offline-first architecture");
+    }
 
-        database = new DeliveryDb(this);
-        database.open();
-
-        try {
-
-            for (String document : AppConstant.documentList) {
-
-                if (ScheduleHelper.documentValid(database, document, true)) {
-
-                    Delivery delivery = database.getDeliveryData(document);
-
-                    deliveryList.add(delivery);
-                }
-            }
-
-            database.close();
-
-        } catch (Exception e) {
-
-            e.printStackTrace();
-
-            ToastLogger.exception(getApplicationContext(), e);
-        }
-
-        if (deliveryList == null || deliveryList.isEmpty()) {
-            Log.i("DashHeader", "DeliveryList is empty - trip data should have been loaded by TripDash");
-            Log.w("DashHeader", "AppConstant.documentList size: " + AppConstant.documentList.size());
+    private void setupModernAdapter() {
+        adapter = new HeaderAdapter(deliveryList, delivery -> {
+            Log.i(TAG, "Delivery selected: " + delivery.getDeliveryId());
             
-            // If somehow the data is not loaded, load it synchronously now
-            if (AppConstant.TRIPID != null && !AppConstant.TRIPID.trim().isEmpty()) {
-                Log.i("DashHeader", "⚡ INSTANT FALLBACK: Loading trip data synchronously");
-                long fallbackStart = System.currentTimeMillis();
-                
-                ScheduleHelper.getSchedule(this, AppConstant.TRIPID);
-                
-                // Reload delivery list after schedule loading
-                loadDeliveryListFromDatabase();
-                
-                long fallbackTime = System.currentTimeMillis() - fallbackStart;
-                Log.i("DashHeader", "✅ INSTANT FALLBACK: Trip data loaded in " + fallbackTime + "ms");
-            }
-        }
-
-        adapter = new HeaderAdapter(deliveryList, new HeaderAdapter.OnItemClickListener() {
-            @Override
-            public void onItemClick(Delivery delivery) {
-
-                AppConstant.DOCUMENT = delivery.getDocument();
-
-                startActivity(new Intent(DashHeader.this, Dash.class));
-
-                finish();
-            }
+            // Set current delivery in ViewModels
+            deliveryViewModel.selectDelivery(delivery.getDeliveryId());
+            
+            // Update UserStateViewModel with current delivery context
+            String tripId = userStateViewModel.getCurrentTripIdValue();
+            String sessionId = authViewModel.getCurrentSessionId();
+            userStateViewModel.setCurrentDelivery(delivery.getDeliveryId(), tripId, sessionId);
+            
+            // Navigate to Dash activity
+            Intent intent = new Intent(DashHeader.this, Dash.class);
+            intent.putExtra("deliveryId", delivery.getDeliveryId());
+            startActivity(intent);
+            finish();
         });
-
-        recyclerView.setAdapter(adapter);
-        
-        Log.i("DashHeader", "✅ INSTANT: Trip " + AppConstant.TRIPID + " ready with " + deliveryList.size() + " deliveries");
-        
-        // Background trip state verification (non-blocking)
-        if (AppConstant.TRIPID != null && !AppConstant.TRIPID.trim().isEmpty()) {
-            verifyTripStateInBackground();
-        }
+        // Pass UserStateViewModel to adapter for proper state management
+        adapter.setUserStateViewModel(userStateViewModel);
     }
     
-    /**
-     * ⚡ INSTANT: Load delivery list from database synchronously
-     */
-    private void loadDeliveryListFromDatabase() {
-        try {
+    // =================== VIEWMODEL SETUP ===================
+    
+    private void initializeViewModels() {
+        deliveryViewModel = new ViewModelProvider(this).get(DeliveryViewModel.class);
+        authViewModel = new ViewModelProvider(this).get(AuthViewModel.class);
+        userStateViewModel = new ViewModelProvider(this).get(UserStateViewModel.class);
+        Log.i(TAG, "ViewModels initialized for offline-first architecture");
+    }
+    
+    private void setupObservers() {
+        // Observe delivery data changes
+        deliveryViewModel.getDeliveriesState().observe(this, deliveriesState -> {
+            if (deliveriesState != null) {
+                handleDeliveryStateChange(deliveriesState);
+            }
+        });
+        
+        // Observe authentication state
+        authViewModel.getAuthState().observe(this, authState -> {
+            if (authState != null) {
+                Log.d(TAG, "Auth state: " + authState);
+                // Handle auth state changes if needed
+            }
+        });
+        
+        // Observe loading state
+        deliveryViewModel.getIsLoading().observe(this, isLoading -> {
+            if (isLoading != null) {
+                handleLoadingStateChange(isLoading);
+            }
+        });
+    }
+
+    private void handleDeliveryStateChange(UiState<List<DeliveryEntity>> deliveriesState) {
+        if (deliveriesState.isSuccess() && deliveriesState.hasData()) {
+            // DIRECT modern entity usage - NO CONVERSION GARBAGE!
+            List<DeliveryEntity> modernDeliveries = deliveriesState.getData();
+
+            Log.i(TAG, "Loaded " + modernDeliveries.size() + " deliveries via MODERN ViewModel");
+
+            // Update MODERN adapter directly
             deliveryList.clear();
+            deliveryList.addAll(modernDeliveries);
+            adapter.notifyDataSetChanged();
             
-            database = new DeliveryDb(this);
-            database.open();
+            // Hide loading indicator
+            showLoadingState(false);
             
-            for (String document : AppConstant.documentList) {
-                if (ScheduleHelper.documentValid(database, document, true)) {
-                    Delivery delivery = database.getDeliveryData(document);
-                    deliveryList.add(delivery);
-                }
-            }
+        } else if (deliveriesState.isError()) {
+            Log.e(TAG, "Error loading deliveries: " + deliveriesState.getErrorMessage());
             
-            database.close();
+            showLoadingState(false);
+            showErrorMessage("Failed to load deliveries: " + deliveriesState.getErrorMessage());
             
-            if (adapter != null) {
-                adapter.notifyDataSetChanged();
-            }
-            
-            Log.i("DashHeader", "✅ INSTANT: Loaded " + deliveryList.size() + " deliveries from database");
-            
-        } catch (Exception e) {
-            Log.e("DashHeader", "Error loading delivery list from database", e);
+        } else if (deliveriesState.isLoading()) {
+            Log.d(TAG, "Loading deliveries...");
+            showLoadingState(true);
         }
     }
     
-    /**
-     * 🎯 BACKGROUND: Verify trip state in background (non-blocking)
-     */
-    private void verifyTripStateInBackground() {
-        Thread verifyThread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    com.clone.EasyDelivery.Utility.UnifiedTripManager tripManager = 
-                        com.clone.EasyDelivery.Utility.UnifiedTripManager.getInstance(DashHeader.this);
-                    
-                    // The unified trip manager handles all state automatically
-                    // Just trigger a sync to ensure everything is up to date
-                    tripManager.forceSync();
-                    Log.i("DashHeader", "🎯 BACKGROUND: Trip sync completed for: " + AppConstant.TRIPID);
-                    
-                } catch (Exception e) {
-                    Log.e("DashHeader", "Error in background trip state verification", e);
-                }
-            }
-        });
-        
-        verifyThread.start();
+    private void showErrorMessage(String message) {
+        // Show error message to user - could be a Toast or update UI
+        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show();
     }
+    
+    private void handleLoadingStateChange(boolean isLoading) {
+        showLoadingState(isLoading);
+    }
+    
+    private void showLoadingState(boolean isLoading) {
+        // If your layout has a loading indicator, show/hide it here
+        Log.d(TAG, "Loading state: " + isLoading);
+    }
+    
+    private void loadDeliveriesUsingViewModel() {
+        String currentTripId = getCurrentTripId();
+        
+        if (currentTripId != null && !currentTripId.trim().isEmpty()) {
+            Log.i(TAG, "Loading deliveries via ViewModel for trip: " + currentTripId);
+            deliveryViewModel.loadDeliveriesForTrip(currentTripId, false);
+        } else {
+            Log.w(TAG, "No current trip ID - falling back to legacy loading");
+        }
+    }
+    
+    private String getCurrentTripId() {
+        // Get trip ID from UserStateViewModel (primary source)
+        String tripId = userStateViewModel.getCurrentTripIdValue();
+        
+        if (tripId != null && !tripId.isEmpty()) {
+            return tripId;
+        }
+        
+        // Try to get from DeliveryViewModel as secondary source
+        String vmTripId = deliveryViewModel.getCurrentTripId();
+        if (vmTripId != null && !vmTripId.isEmpty()) {
+            // Update UserStateViewModel with the found trip ID
+            userStateViewModel.setCurrentTripId(vmTripId);
+            return vmTripId;
+        }
+        
+        // Try to get from AuthViewModel session
+        String sessionId = authViewModel.getCurrentSessionId();
+        if (sessionId != null && !sessionId.isEmpty()) {
+            // In some cases, session ID might be the trip ID
+            userStateViewModel.setCurrentTripId(sessionId);
+            return sessionId;
+        }
+        
+        Log.w(TAG, "No trip ID found in any ViewModel");
+        return null;
+    }
+    
+    // Legacy database loading method removed - now fully MVVM
+    // All data loading handled through ViewModels and Repository pattern
     
 
     @SuppressLint("MissingSuperCall")
@@ -187,58 +246,18 @@ public class DashHeader extends AppCompatActivity {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
 
-                        database.open();
-
-                        if (!database.tripStarted(AppConstant.TRIPID)) {
-                            
-                            // 🚀 INSTANT CLEANUP: If user backs out without starting deliveries,
-                            // immediately clean up the trip claim for better multi-device UX
-                            String tripToCleanup = AppConstant.TRIPID;
-                            
-                            // 🎯 Use unified trip manager for clean trip release
-                            if (tripToCleanup != null && !tripToCleanup.isEmpty()) {
-                                Log.i("DashHeader", "🎯 UNIFIED: User backed out, releasing trip: " + tripToCleanup);
-                                
-                                Thread cleanupThread = new Thread(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        try {
-                                            com.clone.EasyDelivery.Utility.UnifiedTripManager tripManager = 
-                                                com.clone.EasyDelivery.Utility.UnifiedTripManager.getInstance(DashHeader.this);
-                                            
-                                            boolean success = tripManager.releaseTrip(tripToCleanup);
-                                            
-                                            if (success) {
-                                                Log.i("DashHeader", "✅ UNIFIED: Trip " + tripToCleanup + " released successfully");
-                                            } else {
-                                                Log.w("DashHeader", "⚠️ UNIFIED: Trip release had issues (will sync later)");
-                                            }
-                                        } catch (Exception e) {
-                                            Log.e("DashHeader", "Error in trip release", e);
-                                        }
-                                    }
-                                });
-                                cleanupThread.start();
-                            }
-
-                            AppConstant.STARTED_TRIP = "";
-                            AppConstant.TRIPID = "";
-                            
-                            Log.i("DashHeader", "🎯 Trip cleanup completed via direct UnifiedTripManager call");
-                            // Note: Trip release already handled above via tripManager.releaseTrip()
-
-                        } else {
-
-                            AppConstant.STARTED_TRIP = "";
-                            AppConstant.TRIPID = "";
-                        }
-
-                        if (database != null && database.isOpen()) {
-
-                            database.close();
-                        }
-
-                        startActivity(new Intent(DashHeader.this, TripDash.class));
+                        // Handle trip cleanup with ViewModels only
+                        String currentTripId = getCurrentTripId();
+                        
+                        // Clear current delivery and trip context in ViewModels
+                        deliveryViewModel.clearCurrentDelivery();
+                        userStateViewModel.clearCurrentContext();
+                        
+                        Log.i(TAG, "User backed out - cleared trip context: " + currentTripId);
+                        
+                        // Navigate back to trip selection
+                        Intent intent = new Intent(DashHeader.this, TripDash.class);
+                        startActivity(intent);
                         finish();
                     }
                 });
@@ -247,12 +266,14 @@ public class DashHeader extends AppCompatActivity {
     }
 
     @Override
-    public void onDestroy() {
+    protected void onDestroy() {
         super.onDestroy();
-
-        if (database != null && database.isOpen()) {
-
-            database.close();
+        
+        // Clean up ViewBinding
+        if (binding != null) {
+            binding = null;
         }
+        
+        Log.d(TAG, "DashHeader destroyed, resources cleaned up");
     }
 }

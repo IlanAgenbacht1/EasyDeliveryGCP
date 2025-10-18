@@ -1,40 +1,26 @@
 {
   "project_info": {
-    "project_number": "123456789012",
+    "project_number": "833551875057",
     "project_id": "easydelivery-433910",
-    "storage_bucket": "easydelivery-433910.appspot.com"
+    "storage_bucket": "easydelivery-433910.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:123456789012:android:abcdef1234567890abcdef",
+        "mobilesdk_app_id": "1:833551875057:android:8caddd7f3e0a59060fe250",
         "android_client_info": {
           "package_name": "com.clone.EasyDelivery"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "123456789012-abcdefghijklmnopqrstuvwxyz123456.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.clone.EasyDelivery",
-            "certificate_hash": "abcdefghijklmnopqrstuvwxyz1234567890abcd"
-          }
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz1234567"
+          "current_key": "AIzaSyD5jfcWURQ3_yXtdXxsrvOoVvQM7gTqDJk"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "123456789012-abcdefghijklmnopqrstuvwxyz123456.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     }

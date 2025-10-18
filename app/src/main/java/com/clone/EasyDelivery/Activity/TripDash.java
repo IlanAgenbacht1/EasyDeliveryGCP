@@ -27,19 +27,30 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.clone.EasyDelivery.Adapter.TripAdapter;
 import com.clone.EasyDelivery.R;
-import com.clone.EasyDelivery.Utility.AppConstant;
-import com.clone.EasyDelivery.Utility.ScheduleHelper;
-// SyncConstant merged into AppConstant
-import com.clone.EasyDelivery.Utility.UnifiedTripManager;
-import com.clone.EasyDelivery.Firebase.Models.FirestoreTrip;
-import com.google.firebase.auth.FirebaseAuth;
+import com.clone.EasyDelivery.databinding.ActivityTripDashBinding;
+import com.clone.EasyDelivery.sync.models.SyncStatus;
+import com.clone.EasyDelivery.viewmodel.AuthViewModel;
+import com.clone.EasyDelivery.viewmodel.TripViewModel;
+import com.clone.EasyDelivery.viewmodel.UserStateViewModel;
+import com.clone.EasyDelivery.viewmodel.models.UiState;
+import androidx.lifecycle.ViewModelProvider;
 
+import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import com.clone.EasyDelivery.databinding.ActivityTripDashBinding;
 
 import java.util.ArrayList;
 
+import dagger.hilt.android.AndroidEntryPoint;
+
+/**
+ * Modern TripDash Activity using ViewModels and offline-first architecture
+ * Handles trip selection and management with real-time sync
+ *
+ * Uses Hilt for proper dependency injection into ViewModels
+ */
+@AndroidEntryPoint
 public class TripDash extends AppCompatActivity {
 
     TextView title;
@@ -62,8 +73,17 @@ public class TripDash extends AppCompatActivity {
     // 🔧 STABILITY: Track trip list stability to reduce unnecessary updates
     private ArrayList<String> lastKnownTrips = new ArrayList<>();
     private int stableUpdateCount = 0;
+    
+    // State
+    private static final String TAG = "TripDash";
+    
+    // ViewModels for offline-first architecture
+    private TripViewModel tripViewModel;
+    private AuthViewModel authViewModel;
+    private UserStateViewModel userStateViewModel;
 
-
+    // Dependency injection - manually initialized
+    private com.clone.EasyDelivery.util.SharedPreferencesManager preferencesManager;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -73,8 +93,11 @@ public class TripDash extends AppCompatActivity {
         binding = ActivityTripDashBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
-        AppConstant.loadCompletedTripsFromStorage(this);
-        UnifiedTripManager.getInstance(this);
+        // Initialize dependencies manually (instead of @Inject)
+        preferencesManager = new com.clone.EasyDelivery.util.SharedPreferencesManager(this);
+
+        // Initialize ViewModels for offline-first data access
+        initializeViewModels();
 
         fromBottomFabAnim = AnimationUtils.loadAnimation(this, R.anim.from_bottom_fab);
         toBottomFabAnim = AnimationUtils.loadAnimation(this, R.anim.to_bottom_fab);
@@ -133,142 +156,84 @@ public class TripDash extends AppCompatActivity {
                 loadingIcon.setVisibility(View.VISIBLE);
                 title.setText("STARTING TRIP " + tripName + "...");
 
-                AppConstant.TRIPID = tripName;
-
                 startTrip(tripName);
             }
         });
 
         recyclerView.setAdapter(adapter);
 
-        //checkConnectivity();
-
         textHandler = new Handler(Looper.getMainLooper());
-        loop();
-    }
-
-
-    public void loop() {
-        tripUpdateRunnable = new Runnable() {
-            @Override
-            public void run() {
-                // Use modern Firestore async API
-                UnifiedTripManager tripManager = UnifiedTripManager.getInstance(TripDash.this);
-                
-                tripManager.getAvailableTrips()
-                    .thenAccept(firestoreTrips -> {
-                        // Convert FirestoreTrips to trip IDs for UI
-                        ArrayList<String> newTrips = firestoreTrips.stream()
-                            .map(FirestoreTrip::getTripId)
-                            .collect(Collectors.toCollection(ArrayList::new));
-                        
-                        textHandler.post(() -> {
-                            try {
-                                // 🔧 STABILITY: Only update UI if trips actually changed
-                                boolean tripsChanged = !newTrips.equals(lastKnownTrips);
-                                
-                                if (tripsChanged) {
-                                    Log.i("TripDash", "🔄 FIRESTORE_UI: Trip list changed from " + lastKnownTrips.size() + " to " + newTrips.size() + " trips");
-                                    Log.d("TripDash", "🔄 FIRESTORE_UI: Previous: " + lastKnownTrips + ", New: " + newTrips);
-                                    
-                                    adapter.updateTrips(newTrips);
-                                    lastKnownTrips = new ArrayList<>(newTrips);
-                                    stableUpdateCount = 0;
-                                } else {
-                                    stableUpdateCount++;
-                                    Log.v("TripDash", "🔄 FIRESTORE_UI: No changes detected (stable for " + (stableUpdateCount * 5) + "s)");
-                                }
-
-                                if (!newTrips.isEmpty() && !layoutAnimated) {
-                                    loadingIcon.setVisibility(View.INVISIBLE);
-                                    title.setVisibility(View.INVISIBLE);
-
-                                    Animation fadeIn = new AlphaAnimation(0, 1);
-                                    fadeIn.setInterpolator(new DecelerateInterpolator());
-                                    fadeIn.setDuration(1000);
-                                    fadeIn.setStartOffset(250);
-
-                                    title.startAnimation(fadeIn);
-                                    title.setText("SELECT TRIP");
-                                    title.setVisibility(View.VISIBLE);
-                                    layoutAnimated = true;
-                                } else if (newTrips.isEmpty()) {
-                                    checkFirebaseConnectivity();
-                                }
-                                
-                            } catch (Exception e) {
-                                Log.e("TripDash", "Error updating UI in trip loop", e);
-                            }
-                            
-                            // 🔧 ADAPTIVE POLLING: Use longer intervals when trips are stable
-                            long nextPollInterval;
-                            if (stableUpdateCount > 10) {
-                                // After 50 seconds of stability, poll every 15 seconds
-                                nextPollInterval = 15000;
-                            } else if (stableUpdateCount > 3) {
-                                // After 15 seconds of stability, poll every 8 seconds  
-                                nextPollInterval = 8000;
-                            } else {
-                                // Recent changes or first few updates, poll every 5 seconds
-                                nextPollInterval = 5000;
-                            }
-                            
-                            textHandler.postDelayed(this, nextPollInterval);
-                        });
-                    })
-                    .exceptionally(throwable -> {
-                        Log.e("TripDash", "Error fetching trips from Firestore", throwable);
-                        textHandler.post(() -> {
-                            checkFirebaseConnectivity();
-                            textHandler.postDelayed(this, 10000); // Retry in 10 seconds
-                        });
-                        return null;
-                    });
-            }
-        };
-        // Start the first run
-        textHandler.post(tripUpdateRunnable);
-    }
-
-
-    private void checkFirebaseConnectivity() {
-        UnifiedTripManager tripManager = UnifiedTripManager.getInstance(TripDash.this);
-        String syncStatus = tripManager.getSyncStatus();
         
-        if (FirebaseAuth.getInstance().getCurrentUser() == null) {
-            title.setText("NOT AUTHENTICATED - PLEASE LOGIN");
-        } else if (syncStatus.contains("not available")) {
-            title.setText("FIREBASE UNAVAILABLE - NO TRIPS");
+        // NEW: Setup LiveData observers for offline-first data
+        setupObservers();
+        
+        // UPDATED: Start with ViewModel-based approach, fallback to legacy loop
+        loadTripsUsingViewModel();
+    }
+
+
+    /**
+     * Legacy method kept for fallback - now triggers ViewModel refresh instead
+     */
+    public void loop() {
+        Log.i(TAG, "Legacy loop called - redirecting to ViewModel refresh");
+        
+        String driverId = authViewModel.getCurrentDriverId();
+        if (driverId != null && !driverId.isEmpty()) {
+            // Force refresh from network
+            tripViewModel.loadTripsForDriver(driverId, true);
         } else {
-            title.setText("NO TRIPS AVAILABLE");
+            Log.w(TAG, "No authenticated driver found");
+            title.setText("NOT AUTHENTICATED - PLEASE LOGIN");
         }
     }
 
 
-    public void startTrip(String trip) {
+    private void checkApiConnectivity() {
+        // Check authentication status through ViewModel
+        if (authViewModel.getCurrentSessionId() == null) {
+            title.setText("NOT AUTHENTICATED - PLEASE LOGIN");
+        } else {
+            // Check if trips are available using available method
+            if (tripViewModel.hasTripsData()) {
+                title.setText("TRIPS AVAILABLE");
+            } else {
+                title.setText("NO TRIPS AVAILABLE");
+                // Try to refresh trips
+                String driverId = authViewModel.getCurrentDriverId();
+                if (driverId != null) {
+                    tripViewModel.loadTripsForDriver(driverId, true);
+                }
+            }
+        }
+    }
 
-        AppConstant.STARTED_TRIP = AppConstant.TRIPID;
-        ScheduleHelper.getSchedule(this, AppConstant.TRIPID);
+
+    public void startTrip(String tripId) {
+        Log.i(TAG, "Starting trip: " + tripId);
+        
         textHandler.removeCallbacksAndMessages(null);
         
-        new Thread(() -> {
-            try {
-                UnifiedTripManager tripManager = UnifiedTripManager.getInstance(TripDash.this);
-                tripManager.claimAndStartTrip(AppConstant.TRIPID);
-            } catch (Exception e) {
-                Log.e("TripDash", "Error in unified trip operations", e);
-            }
-        }).start();
-
-        startActivity(new Intent(TripDash.this, DashHeader.class));
-        finish();
+        // Update UserStateViewModel with selected trip
+        String sessionId = authViewModel.getCurrentSessionId();
+        userStateViewModel.setCurrentTripId(tripId);
+        userStateViewModel.setCurrentSessionId(sessionId);
+        
+        // Use TripViewModel for offline-first trip start
+        tripViewModel.startTrip(tripId);
+        
+        // Update UI for immediate feedback
+        logo.setVisibility(View.INVISIBLE);
+        loadingIcon.setVisibility(View.VISIBLE);
+        title.setText("STARTING TRIP " + tripId + "...");
+        recyclerView.setFocusable(false);
+        recyclerView.setEnabled(false);
     }
 
 
     @SuppressLint("MissingSuperCall")
     @Override
     public void onBackPressed() {
-        //super.onBackPressed();
 
         if (isExpanded) {
 
@@ -294,8 +259,11 @@ public class TripDash extends AppCompatActivity {
                     new DialogInterface.OnClickListener() {
                         @Override
                         public void onClick(DialogInterface dialog, int which) {
-
-                            startActivity(new Intent(TripDash.this, SplashLogin.class));
+                            // Clear all user state when logging out
+                            userStateViewModel.clearCurrentContext();
+                            authViewModel.logout();
+                            
+                            startActivity(new Intent(TripDash.this, AuthActivity.class));
                             finish();
                         }
                     });
@@ -307,25 +275,13 @@ public class TripDash extends AppCompatActivity {
 
     private void shrinkFab() {
         binding.transparentBg.startAnimation(toBottomBgAnim);
-        //binding.mainFabBtn.startAnimation(rotateAntiClockWiseFabAnim);
-        //binding.galleryFabBtn.startAnimation(toBottomFabAnim);
-        //binding.shareFabBtn.startAnimation(toBottomFabAnim);
-        //binding.sendFabBtn.startAnimation(toBottomFabAnim);
-        //binding.galleryTv.startAnimation(toBottomFabAnim);
         binding.itemReturn.startAnimation(toBottomFabAnim);
-        //binding.sendTv.startAnimation(toBottomFabAnim);
         isExpanded = false;
     }
 
     private void expandFab() {
         binding.transparentBg.startAnimation(fromBottomBgAnim);
-        //binding.mainFabBtn.startAnimation(rotateClockWiseFabAnim);
-       // binding.galleryFabBtn.startAnimation(fromBottomFabAnim);
-        //binding.shareFabBtn.startAnimation(fromBottomFabAnim);
-        //binding.sendFabBtn.startAnimation(fromBottomFabAnim);
-        //binding.galleryTv.startAnimation(fromBottomFabAnim);
         binding.itemReturn.startAnimation(fromBottomFabAnim);
-        //binding.sendTv.startAnimation(fromBottomFabAnim);
         isExpanded = true;
     }
 
@@ -343,12 +299,167 @@ public class TripDash extends AppCompatActivity {
         return super.dispatchTouchEvent(ev);
     }
 
+    // =================== VIEWMODEL SETUP ===================
+    
+    private void initializeViewModels() {
+        // Initialize ViewModels with Hilt injection
+        authViewModel = new ViewModelProvider(this).get(AuthViewModel.class);
+        tripViewModel = new ViewModelProvider(this).get(TripViewModel.class);
+        userStateViewModel = new ViewModelProvider(this).get(UserStateViewModel.class);
+        
+        Log.i(TAG, "ViewModels initialized for offline-first architecture");
+    }
+    
+    private void setupObservers() {
+        // Observe trip data changes
+        tripViewModel.getTripIdsForAdapter().observe(this, tripIds -> {
+            if (tripIds != null) {
+                textHandler.post(() -> {
+                        try {
+                            // Use existing adapter update logic
+                            boolean tripsChanged = !tripIds.equals(lastKnownTrips);
+                            
+                            if (tripsChanged) {
+                                Log.i(TAG, "🔄 VIEWMODEL: Trip list changed from " + lastKnownTrips.size() + " to " + tripIds.size() + " trips");
+                                
+                                adapter.updateTrips(tripIds);
+                                lastKnownTrips = new ArrayList<>(tripIds);
+                                stableUpdateCount = 0;
+                                
+                                // Existing animation logic
+                                if (!tripIds.isEmpty() && !layoutAnimated) {
+                                    showTripsAvailable();
+                                } else if (tripIds.isEmpty()) {
+                                    checkConnectivityStatus();
+                                }
+                            } else {
+                                stableUpdateCount++;
+                                Log.v(TAG, "🔄 VIEWMODEL: No changes detected (stable for " + (stableUpdateCount * 5) + "s)");
+                            }
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error updating UI from ViewModel", e);
+                        }
+                });
+            }
+        });
+        
+        // Observe trip operation results
+        tripViewModel.getCurrentTripState().observe(this, tripState -> {
+            if (tripState != null) {
+                textHandler.post(() -> {
+                    if (tripState.isSuccess()) {
+                        // Trip started successfully - navigate to DashHeader
+                        Log.i(TAG, "Trip started successfully via ViewModel");
+                        
+                        // Update UserStateViewModel with current trip context
+                        String startedTripId = tripViewModel.getCurrentTripId();
+                        String sessionId = authViewModel.getCurrentSessionId();
+                        userStateViewModel.setCurrentTripId(startedTripId);
+                        userStateViewModel.setCurrentSessionId(sessionId);
+                        
+                        startActivity(new Intent(TripDash.this, DashHeader.class));
+                        finish();
+                    } else if (tripState.isError()) {
+                        // Reset UI state on error
+                        logo.setVisibility(View.VISIBLE);
+                        loadingIcon.setVisibility(View.INVISIBLE);
+                        title.setText("ERROR: " + tripState.getErrorMessage());
+                        recyclerView.setEnabled(true);
+                        recyclerView.setFocusable(true);
+                    } else if (tripState.isLoading()) {
+                        // Handle loading state
+                        logo.setVisibility(View.INVISIBLE);
+                        loadingIcon.setVisibility(View.VISIBLE);
+                    }
+                });
+            }
+        });
+        
+        // Observe sync status for offline indicators
+        tripViewModel.getSyncStatus().observe(this, syncStatus -> {
+            if (syncStatus != null) {
+                Log.d(TAG, "Sync status: " + syncStatus);
+                
+                // Update UI based on sync status
+                switch (syncStatus) {
+                    case SYNCING:
+                        // Could add sync indicator to UI
+                        Log.d(TAG, "Syncing trips data...");
+                        break;
+                    case SUCCESS:
+                        Log.d(TAG, "Trip data synchronized");
+                        break;
+                    case ERROR:
+                        Log.w(TAG, "Sync error - using cached data");
+                        break;
+                    case IDLE:
+                        Log.d(TAG, "Sync idle");
+                        break;
+                    default:
+                        break;
+                }
+            }
+        });
+    }
+    
+    private void loadTripsUsingViewModel() {
+        // Get current driver ID and load trips
+        String driverId = authViewModel.getCurrentDriverId();
+        if (driverId != null && !driverId.isEmpty()) {
+            Log.i(TAG, "Loading trips via ViewModel for driver: " + driverId);
+            tripViewModel.loadTripsForDriver(driverId, false);
+        } else {
+            Log.w(TAG, "No authenticated driver found");
+            title.setText("NOT AUTHENTICATED - PLEASE LOGIN");
+            
+            // Navigate back to auth after a delay
+            textHandler.postDelayed(() -> {
+                Intent intent = new Intent(TripDash.this, AuthActivity.class);
+                startActivity(intent);
+                finish();
+            }, 3000);
+        }
+    }
+    
+    private void showTripsAvailable() {
+        loadingIcon.setVisibility(View.INVISIBLE);
+        title.setVisibility(View.INVISIBLE);
+
+        Animation fadeIn = new AlphaAnimation(0, 1);
+        fadeIn.setInterpolator(new DecelerateInterpolator());
+        fadeIn.setDuration(1000);
+        fadeIn.setStartOffset(250);
+
+        title.startAnimation(fadeIn);
+        title.setText("SELECT TRIP");
+        title.setVisibility(View.VISIBLE);
+        layoutAnimated = true;
+    }
+    
+    private void checkConnectivityStatus() {
+        // Use existing connectivity check but with new messaging
+        String errorMsg = getCurrentErrorMessage();
+        if (errorMsg != null) {
+            title.setText(errorMsg);
+        } else {
+            checkApiConnectivity();
+        }
+    }
+    
+    private String getCurrentErrorMessage() {
+        return tripViewModel.getCurrentErrorMessage();
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
 
-        textHandler.removeCallbacksAndMessages(null);
+        // Clean up handlers to prevent memory leaks
+        if (textHandler != null) {
+            textHandler.removeCallbacksAndMessages(null);
+        }
+        
+        // ViewModels are automatically cleaned up by Architecture Components
+        Log.d(TAG, "TripDash destroyed, resources cleaned up");
     }
-    
-    // Device ID functionality moved to UnifiedTripManager
 }
