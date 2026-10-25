@@ -15,3 +15,5 @@
 
 # Security: Never commit service account keys
 app/src/main/assets/service-account-key.json
+# IDE settings and AI chat history
+.idea/
